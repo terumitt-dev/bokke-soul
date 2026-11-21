@@ -18,7 +18,7 @@ var mode := Mode.MESH_AND_POINTS
 var reveal: RevealMap
 var points_instance: MeshInstance3D
 var point_count := 0
-var environment: Environment  # 空や霧の明るさに合わせて、点の色を決める (なくても動く)
+var environment: Environment  # 点だけの方式で、空や霧の明るさに合わせて点の色を決める。渡さなければ、場面の WorldEnvironment を探す
 
 var _meshes: Array = []
 var _player: Node3D
@@ -33,7 +33,8 @@ func setup(world: Node3D, player: Node3D, new_mode: Mode = Mode.MESH_AND_POINTS)
 	add_to_group("point_world")  # 篝火で休んだ時などに、Player から知らされる
 	global_transform = Transform3D.IDENTITY
 	_player = player
-	_meshes = world.find_children("*", "MeshInstance3D", true, false)
+	# メッシュのないノードは、点にも当たり判定にも関係ないので、除く
+	_meshes = world.find_children("*", "MeshInstance3D", true, false).filter(func(node: Node) -> bool: return (node as MeshInstance3D).mesh != null)
 
 	var bounds := AABB()
 	for i in _meshes.size():
@@ -68,11 +69,14 @@ func setup(world: Node3D, player: Node3D, new_mode: Mode = Mode.MESH_AND_POINTS)
 	add_child(points_instance)
 
 	set_mode(new_mode)
+	_update_colors()
 	reveal_at(player.global_position)
 
 
 func set_mode(new_mode: Mode) -> void:
 	mode = new_mode
+	# 素材は、確かめた所の明るさを変える専用のものに置き換える。いまの地形は単色なので、元の素材は戻さない。
+	# 頂点の色や複数の素材を使う世界を扱う時は、元の素材を保っておく仕組みが要る
 	for mesh: MeshInstance3D in _meshes:
 		mesh.material_override = _terrain_material
 		mesh.visible = mode == Mode.MESH_AND_POINTS
@@ -94,7 +98,8 @@ func _process(delta: float) -> void:
 	if _player == null:
 		return
 	var position := _player.global_position
-	if position.distance_to(_last_paint) > PAINT_STEP:
+	# 地図は真上から見たものなので、水平の距離で比べる (その場でジャンプしても、書き込まない)
+	if Vector2(position.x - _last_paint.x, position.z - _last_paint.z).length() > PAINT_STEP:
 		reveal.paint(position, REVEAL_RADIUS)
 		_last_paint = position
 	_since_update += delta
@@ -103,7 +108,8 @@ func _process(delta: float) -> void:
 		_since_update = 0.0
 	_point_material.set_shader_parameter("player_position", position)
 	_point_material.set_shader_parameter("time_seconds", Time.get_ticks_msec() / 1000.0)
-	_update_colors()
+	if mode == Mode.POINTS_ONLY:
+		_update_colors()  # 空の明るさは時刻で変わるので、毎フレーム追う
 
 
 # メッシュの頂点と、三角形の中心を、世界の座標の点にする
@@ -122,11 +128,22 @@ func _collect_points() -> PackedVector3Array:
 	return points
 
 
+# 場面の WorldEnvironment (DayNight が、昼夜に合わせて更新するもの) を探す
+func _find_environment() -> Environment:
+	var found := get_tree().root.find_children("*", "WorldEnvironment", true, false)
+	if found.is_empty():
+		return null
+	return (found[0] as WorldEnvironment).environment
+
+
 # 点の色。面と点を重ねる時は、背景が地面 (暗い) なので、昼も夜も、明るい色にする。
 # 点だけの時は、背景が空なので、空が明るい昼は暗く、暗い夜は明るくする
 func _update_colors() -> void:
 	var bright := Color(0.92, 0.88, 0.78)
 	var dim := Color(0.45, 0.5, 0.62)
+	if mode == Mode.POINTS_ONLY:
+		if environment == null:
+			environment = _find_environment()
 	if mode == Mode.POINTS_ONLY and environment != null:
 		var day := smoothstep(0.12, 0.4, environment.fog_light_color.get_luminance())
 		bright = bright.lerp(Color(0.12, 0.10, 0.08), day)

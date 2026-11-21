@@ -17,6 +17,8 @@ func _initialize() -> void:
 	_test_settings()
 	await _test_point_world()
 	await _test_integration()
+	await _test_environment_colors()
+	await _test_robustness()
 	quit(1 if failures.size() > 0 else 0)
 
 
@@ -204,5 +206,85 @@ func _test_integration() -> void:
 		await process_frame
 	player.rest()
 	check(recorder.calls.size() == 1 and recorder.calls[0].is_equal_approx(fire.global_position), "休むと、点の表現へ、篝火の位置を知らせる")
+	scene.queue_free()
+	await process_frame
+
+
+# 点だけの方式の色は、空の明るさに合わせて変わる (昼は暗く、夜は明るく)。
+# 空の明るさ (WorldEnvironment) は、PointWorld が自分で探す
+func _point_color_at(hour: float, mode: String) -> Color:
+	var scene: Node = load("res://scenes/world_local.tscn").instantiate()
+	var settings := GameSettings.new()
+	settings.time_mode = "fixed"
+	settings.fixed_hour = hour
+	settings.weather_enabled = false
+	scene.get_node("DayNight").settings = settings
+	scene.get_node("World").world_path = "res://assets/sample_world.glb"
+	scene.get_node("World").point_mode = mode
+	root.add_child(scene)
+	for i in 40:
+		await physics_frame
+	var point_world: PointWorld = scene.get_node("World").find_children("*", "PointWorld", false, false)[0]
+	var color: Color = point_world._point_material.get_shader_parameter("point_color")
+	check(point_world.environment != null or mode == "mesh_and_points", "PointWorld が、場面の WorldEnvironment を自分で探して、空の明るさを知る (%s)" % mode)
+	scene.queue_free()
+	await process_frame
+	return color
+
+
+func _test_environment_colors() -> void:
+	var day: Color = await _point_color_at(12.0, "points_only")
+	var night: Color = await _point_color_at(23.0, "points_only")
+	check(day.get_luminance() < 0.4 and night.get_luminance() > 0.6, "点だけの方式: 昼は暗く、夜は明るい点になる (昼 %.2f、夜 %.2f)" % [day.get_luminance(), night.get_luminance()])
+
+	# 面と点を重ねる方式は、背景が地面なので、昼も夜も明るい点
+	var mesh_day: Color = await _point_color_at(12.0, "mesh_and_points")
+	var mesh_night: Color = await _point_color_at(23.0, "mesh_and_points")
+	check(mesh_day.get_luminance() > 0.6 and mesh_night.get_luminance() > 0.6, "面と点の方式: 昼も夜も、明るい点 (昼 %.2f、夜 %.2f)" % [mesh_day.get_luminance(), mesh_night.get_luminance()])
+
+
+func _test_robustness() -> void:
+	# メッシュのない MeshInstance3D があっても、止まらない
+	var world := Node3D.new()
+	var good := _big_world()
+	world.add_child(good.get_child(0).duplicate())
+	world.add_child(MeshInstance3D.new())  # mesh が null
+	var player := Node3D.new()
+	root.add_child(world)
+	root.add_child(player)
+	var point_world := PointWorld.new()
+	root.add_child(point_world)
+	point_world.setup(world, player)
+	check(point_world.point_count > 0, "メッシュのない MeshInstance3D があっても、点が作られる (止まらない)")
+
+	# 高さだけ動いても (ジャンプ)、書き込まない。地図は真上から見たものなので、水平の距離で比べる
+	player.global_position = Vector3(100, 0, 100)
+	for i in 3:
+		await process_frame
+	var covered := point_world.reveal.coverage()
+	player.global_position = Vector3(100, PointWorld.PAINT_STEP * 4.0, 100)
+	for i in 3:
+		await process_frame
+	check(point_world.reveal.coverage() == covered, "真上へ跳んだだけでは、書き込まない (水平の距離で比べる)")
+	point_world.queue_free()
+	world.queue_free()
+	player.queue_free()
+	good.queue_free()
+
+	# 半径 0 以下の書き込みは、何も起きず、止まらない
+	var map := RevealMap.new(AABB(Vector3.ZERO, Vector3(10, 1, 10)), 0.5)
+	map.paint(Vector3(5, 0, 5), 0.0)
+	map.paint(Vector3(5, 0, 5), -3.0)
+	check(map.sample(Vector3(5, 0, 5)) == 0.0 and map.coverage() == 0.0, "半径が 0 以下の書き込みは、何も起きない")
+
+	# 不正な point_mode は、既定 (面と点) にする
+	var scene: Node = load("res://scenes/world_local.tscn").instantiate()
+	scene.get_node("World").world_path = "res://assets/sample_world.glb"
+	scene.get_node("World").point_mode = "bogus"
+	root.add_child(scene)
+	for i in 30:
+		await physics_frame
+	var found := scene.get_node("World").find_children("*", "PointWorld", false, false)
+	check(found.size() == 1 and (found[0] as PointWorld).mode == PointWorld.Mode.MESH_AND_POINTS, "不正な point_mode (@export 経由) も、既定の面と点にする")
 	scene.queue_free()
 	await process_frame

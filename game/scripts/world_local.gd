@@ -40,7 +40,7 @@ func _ready() -> void:
 
 # 点の表現を入れる。歩いた所だけが現れ、まだの所は暗く沈む。off なら入れず、世界は最初から全て見える
 func _add_points(world: Node3D) -> void:
-	var mode := point_mode if not point_mode.is_empty() else GameSettings.load_from().point_mode
+	var mode := point_mode if point_mode in GameSettings.POINT_MODES else GameSettings.load_from().point_mode
 	if mode == "off":
 		return
 	var points := PointWorld.new()

@@ -44,6 +44,8 @@ func pixel_of(world_position: Vector3) -> Vector2i:
 # 世界の位置 (x, z) の周り、radius (m) を確かめた所にする。中心に近い所は 1、縁へ向けてなめらかに 0 になる。
 # すでに大きい値の所は、そのまま (消えない)
 func paint(world_position: Vector3, radius: float) -> void:
+	if radius <= 0.0:
+		return
 	var center := (Vector2(world_position.x, world_position.z) - origin) / cell
 	var reach := radius / cell
 	var x0 := maxi(int(floor(center.x - reach)), 0)
@@ -67,7 +69,8 @@ func sample(world_position: Vector3) -> float:
 	return _image.get_pixel(pixel.x, pixel.y).r
 
 
-# 確かめた所 (0.5 以上) が、世界全体のどれだけを占めるか (0〜1)
+# 確かめた所 (0.5 以上) が、世界全体のどれだけを占めるか (0〜1)。
+# 全ての画素を数えるので重い。テストや確認用で、毎フレームは呼ばない
 func coverage() -> float:
 	var count := 0
 	for y in height():
