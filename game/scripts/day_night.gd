@@ -102,4 +102,4 @@ func _apply() -> void:
 func _current_weather() -> Dictionary:
 	if not settings.weather_enabled:
 		return Weather.params_for("clear")
-	return Weather.params_at(time.total_hours, settings.weather_seed, forced_weather)
+	return Weather.params_at(time.weather_hours, settings.weather_seed, forced_weather)

@@ -69,6 +69,17 @@ func _test_time() -> void:
 	var diff := absf(real.hour - TimeOfDay.realtime_hour())
 	check(minf(diff, 24.0 - diff) < 0.01, "realtime は、パソコンの時刻に合う")
 
+	# 昼夜はローカル時刻で変わるが、天気に使う時間は、タイムゾーンに依存しない (世界共通の時刻)
+	var tokyo := TimeOfDay.new(_settings("realtime"), 540)  # UTC+9
+	var utc := TimeOfDay.new(_settings("realtime"), 0)
+	var new_york := TimeOfDay.new(_settings("realtime"), -300)  # UTC-5
+	check(near(tokyo.weather_hours, utc.weather_hours, 0.01) and near(new_york.weather_hours, utc.weather_hours, 0.01), "実時間では、天気に使う時間はタイムゾーンによらず同じ")
+	var hour_gap := fposmod(tokyo.hour - utc.hour, 24.0)
+	check(near(hour_gap, 9.0, 0.01), "実時間の昼夜は、タイムゾーンに合わせてずれる (東京は UTC より 9 時間進む)")
+	check(near(tokyo.total_hours - utc.total_hours, 9.0, 0.01), "ローカルの通しの時間は、タイムゾーンのずれを含む")
+	var accel := TimeOfDay.new(_settings("accelerated", 60.0, 7.0))
+	check(near(accel.weather_hours, accel.total_hours), "実時間以外では、天気に使う時間は通しの時間と同じ")
+
 	# 時刻の飛ばし (開発用) は、どの方式でも効く
 	var jump := TimeOfDay.new(_settings("fixed", 60.0, 7.0, 22.0))
 	jump.jump(3.0)
