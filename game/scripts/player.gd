@@ -1,8 +1,17 @@
 extends CharacterBody3D
+# 三人称のプレイヤー。カメラは肩越しの追従で、マウス (またはコントローラーの右スティック) で回す。
+# 壁の手前では、カメラが寄って、めり込まない (SpringArm3D)。
+# 移動はカメラの向きが基準で、キャラクターは進む向きへ体を向ける
 
-const SPEED := 5.0
+const WALK_SPEED := 4.0
+const RUN_SPEED := 7.0
+const ACCELERATION := 30.0  # 速度が目標に近づく速さ (m/s^2)。小さいほど、動き出しと止まりが緩やか
+const TURN_SPEED := 12.0  # 体が進む向きへ回る速さ
 const MOUSE_SENSITIVITY := 0.002
-const PITCH_LIMIT := deg_to_rad(85.0)
+const STICK_LOOK_SPEED := 2.6  # 右スティックを倒しきった時の、視点の回る速さ (ラジアン/秒)
+const PITCH_MIN := deg_to_rad(-60.0)  # 見下ろす向き
+const PITCH_MAX := deg_to_rad(30.0)  # 見上げる向き
+const HIDE_MODEL_DISTANCE := 0.9  # カメラがこれより体に近い時は、体を隠す (視界を塞がないように)
 const FALL_LIMIT := -20.0
 const RESCAN_SECONDS := 1.5
 const REST_DISTANCE := 2.5
@@ -14,13 +23,18 @@ var nearby_bonfire: Node3D
 var message_id := 0
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
-@onready var camera: Camera3D = $Camera3D
+@onready var model: Node3D = $Model
+@onready var pivot: Node3D = $CameraPivot
+@onready var arm: SpringArm3D = $CameraPivot/SpringArm3D
+@onready var camera: Camera3D = $CameraPivot/SpringArm3D/Camera3D
 @onready var message: Label = get_node("../HUD/Message")
 @onready var prompt: Label = get_node("../HUD/Prompt")
 
 
 func _ready() -> void:
+	InputActions.ensure()
 	spawn_position = global_position
+	arm.add_excluded_object(get_rid())  # カメラが、自分の体にぶつからないようにする
 	prompt.text = "E: 休む"
 	prompt.visible = false
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -41,11 +55,10 @@ func _input(event: InputEvent) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		rotate_y(-event.relative.x * MOUSE_SENSITIVITY)
-		camera.rotation.x = clampf(camera.rotation.x - event.relative.y * MOUSE_SENSITIVITY, -PITCH_LIMIT, PITCH_LIMIT)
+		look(-event.relative.x * MOUSE_SENSITIVITY, -event.relative.y * MOUSE_SENSITIVITY)
 	elif event is InputEventMouseButton and event.pressed:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-	elif event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_E:
+	elif event.is_action_pressed("rest"):
 		rest()
 
 
@@ -53,23 +66,40 @@ func _physics_process(delta: float) -> void:
 	if rescanning:
 		return
 
+	# コントローラーの右スティックで視点を回す (マウスは _unhandled_input で扱う)
+	var stick := Input.get_vector("look_left", "look_right", "look_up", "look_down")
+	if stick != Vector2.ZERO:
+		look(-stick.x * STICK_LOOK_SPEED * delta, -stick.y * STICK_LOOK_SPEED * delta)
+
 	if not is_on_floor():
 		velocity.y -= gravity * delta
 
-	var input := Vector2(
-		float(Input.is_physical_key_pressed(KEY_D)) - float(Input.is_physical_key_pressed(KEY_A)),
-		float(Input.is_physical_key_pressed(KEY_S)) - float(Input.is_physical_key_pressed(KEY_W)),
-	)
-	var direction := (transform.basis * Vector3(input.x, 0.0, input.y)).normalized()
-	velocity.x = direction.x * SPEED
-	velocity.z = direction.z * SPEED
+	# 移動はカメラの向き (左右の回転だけ) が基準。アナログスティックは、倒した量が速さになる
+	var input := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+	var direction := Basis(Vector3.UP, pivot.rotation.y) * Vector3(input.x, 0.0, input.y)
+	var speed := RUN_SPEED if Input.is_action_pressed("run") else WALK_SPEED
+	var target := direction * speed
+	velocity.x = move_toward(velocity.x, target.x, ACCELERATION * delta)
+	velocity.z = move_toward(velocity.z, target.z, ACCELERATION * delta)
+
+	# 体を進む向きへ回す。立ち止まっている間は、向きを保つ
+	if direction.length() > 0.1:
+		var yaw := atan2(-direction.x, -direction.z)  # モデルの正面は -Z
+		model.rotation.y = lerp_angle(model.rotation.y, yaw, clampf(TURN_SPEED * delta, 0.0, 1.0))
 
 	move_and_slide()
 
+	model.visible = arm.get_hit_length() > HIDE_MODEL_DISTANCE
 	_update_nearby_bonfire()
 
 	if global_position.y < FALL_LIMIT:
 		_rescan()
+
+
+# 視点を回す。yaw は左右、pitch は上下 (ラジアン)。見上げ、見下ろしには上限がある
+func look(yaw: float, pitch: float) -> void:
+	pivot.rotation.y += yaw
+	pivot.rotation.x = clampf(pivot.rotation.x + pitch, PITCH_MIN, PITCH_MAX)
 
 
 # 近くにある一番近い篝火を探して、「休む」の案内を出す
