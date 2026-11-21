@@ -5,6 +5,8 @@ extends Node3D
 
 const ARG_PREFIX := "--world="
 const START_HEIGHT := 2.0
+# いまは色のないデータだけを扱うので、くすんだ砂の色を付ける (色つきの点群を扱う時に見直す)
+const TERRAIN_COLOR := Color(0.42, 0.38, 0.33)
 
 @export var world_path := ""
 
@@ -33,8 +35,12 @@ func _ready() -> void:
 	# 当たり判定は片面。メッシュの法線が内向きだと、地面を抜けてしまう
 	var meshes := world.find_children("*", "MeshInstance3D", true, false)
 	var bounds := AABB()
+	var material := StandardMaterial3D.new()
+	material.albedo_color = TERRAIN_COLOR
+	material.roughness = 1.0
 	for i in meshes.size():
 		var mesh: MeshInstance3D = meshes[i]
+		mesh.material_override = material
 		mesh.create_trimesh_collision()
 		var box := mesh.global_transform * mesh.get_aabb()
 		bounds = box if i == 0 else bounds.merge(box)

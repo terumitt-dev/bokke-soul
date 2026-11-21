@@ -1,7 +1,8 @@
-[gd_scene load_steps=6 format=3]
+[gd_scene load_steps=7 format=3]
 
 [ext_resource type="Script" path="res://scripts/player.gd" id="1_player"]
 [ext_resource type="Script" path="res://scripts/world_local.gd" id="2_world"]
+[ext_resource type="Script" path="res://scripts/day_night.gd" id="3_daynight"]
 
 [sub_resource type="Environment" id="Environment_dark"]
 background_mode = 1
@@ -71,3 +72,12 @@ offset_bottom = -60.0
 grow_horizontal = 2
 grow_vertical = 0
 horizontal_alignment = 1
+
+[node name="DayNight" type="Node" parent="."]
+script = ExtResource("3_daynight")
+
+[node name="Clock" type="Label" parent="HUD"]
+offset_left = 16.0
+offset_top = 12.0
+offset_right = 316.0
+offset_bottom = 38.0

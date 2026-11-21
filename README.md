@@ -38,3 +38,19 @@ data/raw/    元の点群(リポジトリには含めない)
 ## データについて
 
 使用するデータの出典とライセンスは `docs/` に記載します。元の点群は再配布条件があるため、リポジトリには含めません。
+
+## 昼夜と設定
+
+世界は時刻に合わせて、空、霧、太陽の光が変わります。設定は `user://settings.cfg` から読みます。ファイルがない、または値が不正な時は、既定値で動きます。
+
+```
+[time]
+mode="accelerated"        ; accelerated = 1 日を短くする / realtime = 実時間 / fixed = 時刻を止める
+day_length_minutes=60.0   ; accelerated の時、1 日 (昼夜が一巡) を何分にするか
+start_hour=7.0            ; accelerated の時、始まる時刻 (0〜24)
+fixed_hour=12.0           ; fixed の時の時刻 (0〜24)
+```
+
+macOS では `~/Library/Application Support/Godot/app_userdata/bokke-soul/settings.cfg` です。
+
+開発中は、`T` キーで時刻を 3 時間ずつ飛ばせます (画面の左上に時刻が出ます)。
