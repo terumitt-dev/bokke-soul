@@ -5,17 +5,24 @@ const MOUSE_SENSITIVITY := 0.002
 const PITCH_LIMIT := deg_to_rad(85.0)
 const FALL_LIMIT := -20.0
 const RESCAN_SECONDS := 1.5
+const REST_DISTANCE := 2.5
+const NOTICE_SECONDS := 1.5
 
 var spawn_position: Vector3
 var rescanning := false
+var nearby_bonfire: Node3D
+var message_id := 0
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
 @onready var camera: Camera3D = $Camera3D
 @onready var message: Label = get_node("../HUD/Message")
+@onready var prompt: Label = get_node("../HUD/Prompt")
 
 
 func _ready() -> void:
 	spawn_position = global_position
+	prompt.text = "E: 休む"
+	prompt.visible = false
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
@@ -38,6 +45,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		camera.rotation.x = clampf(camera.rotation.x - event.relative.y * MOUSE_SENSITIVITY, -PITCH_LIMIT, PITCH_LIMIT)
 	elif event is InputEventMouseButton and event.pressed:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	elif event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_E:
+		rest()
 
 
 func _physics_process(delta: float) -> void:
@@ -57,17 +66,48 @@ func _physics_process(delta: float) -> void:
 
 	move_and_slide()
 
+	_update_nearby_bonfire()
+
 	if global_position.y < FALL_LIMIT:
 		_rescan()
 
 
-# 床の下へ落ちたら、位置を見失った演出を出して最後の地点へ戻す
+# 近くにある一番近い篝火を探して、「休む」の案内を出す
+func _update_nearby_bonfire() -> void:
+	nearby_bonfire = null
+	var nearest := REST_DISTANCE
+	for bonfire: Node3D in get_tree().get_nodes_in_group("bonfire"):
+		var distance := global_position.distance_to(bonfire.global_position)
+		if distance <= nearest:
+			nearest = distance
+			nearby_bonfire = bonfire
+	prompt.visible = nearby_bonfire != null
+
+
+# 篝火の近くで休むと、ここが復帰地点になる
+func rest() -> void:
+	if rescanning or nearby_bonfire == null:
+		return
+	spawn_position = nearby_bonfire.rest_position()
+	_show_message("基準点を確定しました", NOTICE_SECONDS)
+
+
+# 床の下へ落ちたら、位置を見失った演出を出して最後に休んだ篝火へ戻す
 func _rescan() -> void:
 	rescanning = true
-	message.text = "位置を見失いました。再スキャン中…"
-	message.visible = true
-	await get_tree().create_timer(RESCAN_SECONDS).timeout
+	prompt.visible = false
+	await _show_message("位置を見失いました。再スキャン中…", RESCAN_SECONDS)
 	global_position = spawn_position
 	velocity = Vector3.ZERO
-	message.visible = false
 	rescanning = false
+
+
+# 一定時間メッセージを出す。後から別のメッセージが出ていたら、消さない
+func _show_message(text: String, seconds: float) -> void:
+	message_id += 1
+	var id := message_id
+	message.text = text
+	message.visible = true
+	await get_tree().create_timer(seconds).timeout
+	if id == message_id:
+		message.visible = false

@@ -39,4 +39,27 @@ func _initialize() -> void:
 		await physics_frame
 	check(player.global_position.distance_to(spawn) < 0.1 and not player.rescanning, "開始地点へ復帰する")
 
+	# 篝火から離れた場所では、休めない
+	player.global_position = Vector3(0, 0.05, 4)
+	for i in 5:
+		await physics_frame
+	check(not main.get_node("HUD/Prompt").visible, "篝火から遠いと案内が出ない")
+	player.rest()
+	check(player.spawn_position.distance_to(spawn) < 0.1, "篝火から遠いと休めない")
+
+	# 篝火の近くでは案内が出て、休むと復帰地点が変わる
+	var far: Node3D = main.get_node("BonfireFar")
+	player.global_position = far.rest_position()
+	for i in 5:
+		await physics_frame
+	check(main.get_node("HUD/Prompt").visible, "篝火の近くで案内が出る")
+	player.rest()
+	check(player.spawn_position.distance_to(far.rest_position()) < 0.1, "休むと復帰地点が篝火になる")
+
+	# 休んだあとに落ちると、最初の地点ではなく、休んだ篝火へ戻る
+	player.global_position = Vector3(0, -30, 0)
+	for i in 220:
+		await physics_frame
+	check(player.global_position.distance_to(far.rest_position()) < 0.5 and not player.rescanning, "落下すると最後に休んだ篝火へ戻る")
+
 	quit(1 if failures.size() > 0 else 0)
