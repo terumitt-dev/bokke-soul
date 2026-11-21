@@ -29,6 +29,10 @@ def load_dem(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     ys = np.unique(data[:, 1])
     if len(xs) < 2 or len(ys) < 2:
         raise ValueError("格子になっていません (東西・南北にそれぞれ 2 点以上が必要です)")
+    for name, axis in (("東西", xs), ("南北", ys)):
+        steps = np.diff(axis)
+        if not np.allclose(steps, steps[0], rtol=1e-3):
+            raise ValueError(f"{name}が等間隔の格子ではありません (行や列が欠けている可能性があります)")
     z = np.full((len(ys), len(xs)), np.nan)
     z[np.searchsorted(ys, data[:, 1]), np.searchsorted(xs, data[:, 0])] = data[:, 2]
     z[z <= NODATA_BELOW] = np.nan
@@ -42,7 +46,8 @@ def heightfield_mesh(xs: np.ndarray, ys: np.ndarray, z: np.ndarray) -> trimesh.T
     vertices = np.column_stack([gx.ravel(), gy.ravel(), z.ravel()])
 
     index = np.arange(ny * nx).reshape(ny, nx)
-    a, b = index[:-1, :-1], index[:-1, 1:]  # 北が上、東が右に並ぶ
+    # 行は北へ、列は東へ進む。a が南西、b が南東、c が北東、d が北西の角
+    a, b = index[:-1, :-1], index[:-1, 1:]
     d, c = index[1:, :-1], index[1:, 1:]
     valid = np.isfinite(z[:-1, :-1]) & np.isfinite(z[:-1, 1:]) & np.isfinite(z[1:, :-1]) & np.isfinite(z[1:, 1:])
     a, b, c, d = a[valid], b[valid], c[valid], d[valid]

@@ -82,3 +82,14 @@ def test_invalid_stride_is_rejected(tmp_path):
     xs, ys, z = d2m.load_dem(write_dem(tmp_path / "dem.txt"))
     with pytest.raises(ValueError, match="stride"):
         d2m.convert(xs, ys, z, stride=0)
+
+
+def test_missing_row_is_rejected(tmp_path):
+    # 行がまるごと欠けた格子は、間隔が崩れるので受け付けない
+    path = write_dem(tmp_path / "dem.txt")
+    lines = path.read_text().splitlines()
+    kept = [line for line in lines if not line.split()[1].startswith("-129297.2")]  # 北から 5 行目を落とす
+    assert len(kept) < len(lines)
+    path.write_text("\n".join(kept) + "\n")
+    with pytest.raises(ValueError, match="等間隔"):
+        d2m.load_dem(path)
