@@ -1,6 +1,6 @@
 [gd_scene load_steps=7 format=3]
 
-[ext_resource type="Script" path="res://scripts/player.gd" id="1_player"]
+[ext_resource type="PackedScene" path="res://scenes/player.tscn" id="1_player"]
 [ext_resource type="Script" path="res://scripts/world.gd" id="2_world"]
 [ext_resource type="PackedScene" path="res://assets/sample_world.glb" id="3_glb"]
 [ext_resource type="PackedScene" path="res://scenes/bonfire.tscn" id="4_bonfire"]
@@ -13,10 +13,6 @@ ambient_light_color = Color(0.25, 0.27, 0.32, 1)
 fog_enabled = true
 fog_light_color = Color(0.02, 0.02, 0.03, 1)
 fog_density = 0.04
-
-[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
-radius = 0.4
-height = 1.8
 
 [node name="WorldSample" type="Node3D"]
 
@@ -34,16 +30,8 @@ world_scene = ExtResource("3_glb")
 [node name="BonfireStart" parent="." instance=ExtResource("4_bonfire")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0.5, -12)
 
-[node name="Player" type="CharacterBody3D" parent="."]
+[node name="Player" parent="." instance=ExtResource("1_player")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 1, -10)
-script = ExtResource("1_player")
-
-[node name="Shape" type="CollisionShape3D" parent="Player"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
-shape = SubResource("CapsuleShape3D_player")
-
-[node name="Camera3D" type="Camera3D" parent="Player"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0)
 
 [node name="HUD" type="CanvasLayer" parent="."]
 

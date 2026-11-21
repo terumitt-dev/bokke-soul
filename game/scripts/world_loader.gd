@@ -8,9 +8,7 @@ extends RefCounted
 const ARG_PREFIX := "--world="
 const SAMPLE_PATH := "res://assets/sample_world.glb"
 # いまは色のないデータだけを扱うので、くすんだ砂の色を付ける (色つきの点群を扱う時に見直す)
-const DEFAULT_TERRAIN_COLOR := Color(0.40, 0.38, 0.35)
-
-static var terrain_color := DEFAULT_TERRAIN_COLOR
+const TERRAIN_COLOR := Color(0.40, 0.38, 0.35)
 
 
 # タイトル画面で選んだ世界の場所。ゲーム本体へ引き継ぐ (起動時の引数がない時に使う)
@@ -42,7 +40,7 @@ static func load_world(path: String) -> Dictionary:
 
 	_convert_importer_meshes(world)
 	var material := StandardMaterial3D.new()
-	material.albedo_color = terrain_color
+	material.albedo_color = TERRAIN_COLOR
 	material.roughness = 1.0
 	for mesh: MeshInstance3D in world.find_children("*", "MeshInstance3D", true, false):
 		mesh.material_override = material

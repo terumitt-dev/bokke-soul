@@ -29,34 +29,40 @@ steps:
   - name: walk-test
     image: barichello/godot-ci:4.7.2
     commands:
-      - godot --headless --path game --script res://tests/walk_test.gd
+      - sh game/tests/run.sh walk_test
 
   # 点群から作ったメッシュ (GLB) を読み込んだ世界を、歩けることの動作テスト
   - name: world-test
     image: barichello/godot-ci:4.7.2
     commands:
-      - godot --headless --path game --script res://tests/world_test.gd
+      - sh game/tests/run.sh world_test
 
   # 実行時に指定した GLB を読み込んで歩けることの動作テスト (リポジトリ内のサンプルを使う)
   - name: world-local-test
     image: barichello/godot-ci:4.7.2
     commands:
-      - godot --headless --path game --script res://tests/world_local_test.gd
+      - sh game/tests/run.sh world_local_test
 
   # 昼夜 (時刻の進み方、設定、空の色、場面への反映) の動作テスト
   - name: day-night-test
     image: barichello/godot-ci:4.7.2
     commands:
-      - godot --headless --path game --script res://tests/day_night_test.gd
+      - sh game/tests/run.sh day_night_test
 
   # 天気 (決まり方、なめらかな移り変わり、色味、場面への反映) の動作テスト
   - name: weather-test
     image: barichello/godot-ci:4.7.2
     commands:
-      - godot --headless --path game --script res://tests/weather_test.gd
+      - sh game/tests/run.sh weather_test
 
   # タイトル画面 (表示、メニュー、クレジット、出典) の動作テスト
   - name: title-test
     image: barichello/godot-ci:4.7.2
     commands:
-      - godot --headless --path game --script res://tests/title_test.gd
+      - sh game/tests/run.sh title_test
+
+  # 三人称のプレイヤー (操作の名前、カメラ基準の移動、体の向き、カメラの壁よけ、視点操作) の動作テスト
+  - name: player-test
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - sh game/tests/run.sh player_test

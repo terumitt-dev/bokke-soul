@@ -223,6 +223,9 @@ func _test_scene() -> void:
 	var look: DayNight = look_scene.get_node("DayNight")
 	check(near(look.grade.saturation, 0.55) and near(look.grade.moon, 0.6), "既定の見た目は、くすんだ色 (彩度 0.55) と、強い月明かり (0.6)")
 	check(look.moon.visible and near(look.moon.light_energy, 0.6, 0.05), "既定では、夜に月明かりが出る (0 時)")
-	check(WorldLoader.terrain_color.is_equal_approx(WorldLoader.DEFAULT_TERRAIN_COLOR), "地形の色は、既定の砂の色")
+	var terrain: Node3D = WorldLoader.load_world(WorldLoader.SAMPLE_PATH).node
+	var terrain_mesh: MeshInstance3D = terrain.find_children("*", "MeshInstance3D", true, false)[0]
+	check((terrain_mesh.material_override as StandardMaterial3D).albedo_color.is_equal_approx(WorldLoader.TERRAIN_COLOR), "地形には、決めた砂の色が付く")
+	terrain.free()
 	look_scene.queue_free()
 	await process_frame
