@@ -181,6 +181,7 @@ func rest() -> void:
 	if rescanning or nearby_bonfire == null:
 		return
 	spawn_position = nearby_bonfire.rest_position()
+	get_tree().call_group("point_world", "on_rest", nearby_bonfire.global_position)
 	_show_message("基準点を確定しました", NOTICE_SECONDS)
 
 

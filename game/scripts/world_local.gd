@@ -5,6 +5,8 @@ extends Node3D
 const START_HEIGHT := 2.0
 
 @export var world_path := ""
+# 点の表現の方式 (mesh_and_points / points_only / off)。空なら、設定ファイルから読む
+@export var point_mode := ""
 
 @onready var player: CharacterBody3D = get_node("../Player")
 @onready var message: Label = get_node("../HUD/Message")
@@ -32,6 +34,19 @@ func _ready() -> void:
 	start.y += START_HEIGHT
 	player.global_position = start
 	player.spawn_position = start
+
+	_add_points(world)
+
+
+# 点の表現を入れる。歩いた所だけが現れ、まだの所は暗く沈む。off なら入れず、世界は最初から全て見える
+func _add_points(world: Node3D) -> void:
+	var mode := point_mode if not point_mode.is_empty() else GameSettings.load_from().point_mode
+	if mode == "off":
+		return
+	var points := PointWorld.new()
+	points.name = "PointWorld"
+	add_child(points)
+	points.setup(world, player, PointWorld.Mode.POINTS_ONLY if mode == "points_only" else PointWorld.Mode.MESH_AND_POINTS)
 
 
 func _fail(text: String) -> void:
