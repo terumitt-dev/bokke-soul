@@ -40,3 +40,9 @@ steps:
     image: barichello/godot-ci:4.7.2
     commands:
       - godot --headless --path game --script res://tests/world_local_test.gd
+
+  # 昼夜 (時刻の進み方、設定、空の色、場面への反映) の動作テスト
+  - name: day-night-test
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - godot --headless --path game --script res://tests/day_night_test.gd
