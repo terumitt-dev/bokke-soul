@@ -49,6 +49,10 @@ func _initialize() -> void:
 	await _test_facing()
 	await _test_look()
 	await _test_camera_collision()
+	await _test_shoulder_collision()
+	await _test_model_hide_hysteresis()
+	await _test_run_fov()
+	await _test_jump()
 	await _test_rest_action()
 	for action: String in InputActions.ACTIONS:
 		Input.action_release(action)
@@ -86,7 +90,7 @@ func _test_camera_rig() -> void:
 	var behind: Vector3 = player.camera.global_position - player.global_position
 	check(behind.z > 2.5 and absf(behind.x) < 1.0, "カメラは、プレイヤーの後ろ (向いている側の反対) にある")
 	check(player.arm.get_hit_length() > 3.9, "開けた場所では、カメラは自分の体に邪魔されず、離れている")
-	check(player.camera.h_offset > 0.0, "カメラは、肩越しに少しずれている")
+	check(player.arm.position.x > 0.3, "カメラは、肩越しに右へずれている (%.2f)" % player.arm.position.x)
 
 
 func _test_move_relative_to_camera() -> void:
@@ -207,6 +211,165 @@ func _test_camera_collision() -> void:
 	await _frames(15)
 	check(player.arm.get_hit_length() > 3.9, "壁から離れると、カメラは元の距離に戻る")
 	check(player.model.visible, "壁から離れると、体がまた見える")
+
+
+func _test_shoulder_collision() -> void:
+	# 右側 (東) に壁がある時、肩越しのずれが壁に入り込まないよう縮む。
+	# 東の壁は、内側の面が x = 7.5。ずれを縮めないと、映る視点は x = 7.6 付近になって壁の中に入る
+	await _reset(0.0)
+	player.global_position = Vector3(7.0, 0.05, 0.0)
+	await _frames(30)
+	check(player.arm.position.x < player.SHOULDER_OFFSET - 0.2, "右に壁があると、肩越しのずれが縮む (%.2f)" % player.arm.position.x)
+	check(player.camera.global_position.x < 7.5, "映る視点 (カメラの位置) は、右の壁の中に入らない (%.2f)" % player.camera.global_position.x)
+
+	# 壁から離れると、ずれが元に戻る
+	player.global_position = START
+	await _frames(40)
+	check(absf(player.arm.position.x - player.SHOULDER_OFFSET) < 0.05, "壁から離れると、肩越しのずれが元に戻る")
+
+	# 左側 (西) に壁があっても、右へずれるだけなので、縮まない (西には壁がない部屋だが、体の左右で比べる)
+	await _reset(PI)  # カメラを反対向きにすると、「右」は西になる
+	player.global_position = Vector3(7.0, 0.05, 0.0)
+	await _frames(30)
+	check(absf(player.arm.position.x - player.SHOULDER_OFFSET) < 0.05, "壁が反対側 (左) にある時は、ずれは縮まない")
+
+
+func _test_model_hide_hysteresis() -> void:
+	# 隠すのは 0.9m 未満、戻すのは 1.1m 以上。その間は、直前の状態を保つ (ちらつかない)
+	await _reset(PI)
+	player.global_position = Vector3(0, 0.05, -6.8)
+	await _frames(15)
+	check(not player.model.visible, "壁に近い (0.9m 未満) と、体を隠す")
+	player.global_position = Vector3(0, 0.05, -6.2)  # カメラの距離が、隠す 0.9 と戻す 1.1 の間 (約 1.0)
+	await _frames(15)
+	var hit: float = player.arm.get_hit_length()
+	check(hit > 0.9 and hit < 1.1, "カメラの距離が、閾値の間にある (%.2f)" % hit)
+	check(not player.model.visible, "閾値の間では、隠れていたら、隠れたまま")
+
+	await _reset(PI)
+	player.global_position = START
+	await _frames(15)
+	player.global_position = Vector3(0, 0.05, -6.2)
+	await _frames(15)
+	check(player.model.visible, "閾値の間では、見えていたら、見えたまま (ちらつかない)")
+
+
+func _test_run_fov() -> void:
+	await _reset()
+	var walk_fov: float = player.camera.fov
+	Input.action_press("move_forward")
+	Input.action_press("run")
+	await _frames(40)
+	var run_fov: float = player.camera.fov
+	Input.action_release("run")
+	Input.action_release("move_forward")
+	await _frames(60)
+	check(run_fov > walk_fov + 4.0, "走ると、視野が広がって、速さを感じやすい (%.1f → %.1f)" % [walk_fov, run_fov])
+	check(absf(player.camera.fov - walk_fov) < 0.5, "止まると、視野が元に戻る")
+
+
+# hold_frames フレームのあいだの最高点を、base_y (床の高さ。省略すると今の高さ) からの高さで返す
+func _jump_peak(hold_frames: int = 60, base_y: float = NAN) -> float:
+	var start_y := player.global_position.y if is_nan(base_y) else base_y
+	var peak := player.global_position.y
+	for i in hold_frames:
+		await physics_frame
+		peak = maxf(peak, player.global_position.y)
+	return peak - start_y
+
+
+func _test_jump() -> void:
+	# ジャンプの高さは、JUMP_HEIGHT (1.2m) 付近。もう一度押しても、空中では跳べない (二段ジャンプなし)
+	await _reset()
+	var floor_y := player.global_position.y
+	Input.action_press("jump")
+	var height: float = await _jump_peak(10, floor_y)
+	Input.action_release("jump")
+	check(player.velocity.y > 0.0 or height > 0.3, "ジャンプで、体が浮く")
+	Input.action_press("jump")  # 空中でもう一度
+	height = maxf(height, await _jump_peak(50, floor_y))
+	Input.action_release("jump")
+	check(absf(height - player.JUMP_HEIGHT) < 0.2, "ジャンプの高さは JUMP_HEIGHT 付近 (%.2f m)" % height)
+	await _frames(40)
+	check(player.is_on_floor(), "ジャンプのあと、着地する")
+
+	# 押しっぱなしでも、着地するたびに跳ぶだけ (空中で勝手に伸びたりしない)
+	await _reset()
+	Input.action_press("jump")
+	var held: float = await _jump_peak(30)
+	Input.action_release("jump")
+	check(held < player.JUMP_HEIGHT + 0.2, "押しっぱなしでも、1 回の高さを超えない (%.2f m)" % held)
+
+	# 地面を離れた直後 (コヨーテタイム) は、まだ跳べる。時間が過ぎたら、跳べない
+	await _reset()
+	player.global_position = Vector3(0, 3.0, 4)  # 空中へ移す (直前まで床の上にいた扱い)
+	player.velocity = Vector3.ZERO
+	await _frames(3)
+	Input.action_press("jump")
+	await _frames(2)
+	Input.action_release("jump")
+	check(player.velocity.y > 0.0 or player.global_position.y > 3.0, "地面を離れた直後は、まだ跳べる (コヨーテタイム)")
+
+	await _reset()
+	player.global_position = Vector3(0, 6.0, 4)
+	player.velocity = Vector3.ZERO
+	await _frames(15)  # 0.25 秒たつ (猶予 0.12 秒を過ぎる)
+	var fall_speed: float = player.velocity.y
+	Input.action_press("jump")
+	await _frames(2)
+	Input.action_release("jump")
+	check(player.velocity.y <= fall_speed, "時間が過ぎたあとの空中では、跳べない")
+
+	# 着地の直前に押しても、着地した時に跳ぶ (先行入力)
+	await _reset()
+	player.global_position = Vector3(0, 0.30, 4)
+	player.velocity = Vector3.ZERO
+	await _frames(8)  # 着地の少し前
+	Input.action_press("jump")
+	await _frames(2)
+	Input.action_release("jump")
+	var buffered: float = await _jump_peak(40)
+	check(buffered > 0.5, "着地の少し前に押すと、着地した時に跳ぶ (先行入力、%.2f m)" % buffered)
+
+	# 着地よりずっと前 (コヨーテタイムが過ぎたあと、着地の猶予よりも前) に押しても、跳ばない。
+	# 1.0m の高さから落とし、0.17 秒たってから押す。着地するのは約 0.45 秒後で、先行入力の猶予は約 0.29 秒まで
+	await _reset()
+	player.global_position = Vector3(0, 1.0, 4)
+	player.velocity = Vector3.ZERO
+	await _frames(10)
+	Input.action_press("jump")
+	await _frames(2)
+	Input.action_release("jump")
+	for i in 90:
+		if player.is_on_floor():
+			break
+		await physics_frame
+	var too_early: float = await _jump_peak(25)  # 着地してから、勝手に跳ばないか
+	check(player.is_on_floor() and too_early < 0.3, "着地よりずっと前に押しても、着地で跳ばない (%.2f m)" % too_early)
+
+	# 空中では、地上より向きを変えにくい。走りジャンプでは、勢いを保つ
+	await _reset()
+	Input.action_press("move_forward")
+	Input.action_press("run")
+	await _frames(40)
+	Input.action_press("jump")
+	await _frames(3)
+	Input.action_release("jump")
+	await _frames(10)
+	var air_speed := _horizontal(player.velocity).length()
+	Input.action_release("run")
+	Input.action_release("move_forward")
+	check(not player.is_on_floor() and air_speed > player.RUN_SPEED * 0.8, "走りジャンプでは、空中でも勢いを保つ (%.2f)" % air_speed)
+
+	await _reset()
+	player.global_position = Vector3(0, 3.0, 4)
+	player.velocity = Vector3.ZERO
+	await _frames(2)
+	Input.action_press("move_forward")
+	await _frames(10)
+	var air_control := _horizontal(player.velocity).length()
+	Input.action_release("move_forward")
+	check(air_control < player.WALK_SPEED * 0.7, "空中では、地上ほど急には向きや速さを変えられない (%.2f)" % air_control)
 
 
 func _test_rest_action() -> void:

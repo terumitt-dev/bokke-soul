@@ -1,17 +1,27 @@
 extends CharacterBody3D
 # 三人称のプレイヤー。カメラは肩越しの追従で、マウス (またはコントローラーの右スティック) で回す。
-# 壁の手前では、カメラが寄って、めり込まない (SpringArm3D)。
-# 移動はカメラの向きが基準で、キャラクターは進む向きへ体を向ける
+# 壁の手前では、カメラが寄って、めり込まない (SpringArm3D)。肩越しのずれも、壁に入らないよう縮む。
+# 移動はカメラの向きが基準で、キャラクターは進む向きへ体を向ける。ジャンプができる
 
 const WALK_SPEED := 4.0
 const RUN_SPEED := 7.0
-const ACCELERATION := 30.0  # 速度が目標に近づく速さ (m/s^2)。小さいほど、動き出しと止まりが緩やか
+const ACCELERATION := 30.0  # 地上で、速度が目標に近づく速さ (m/s^2)。小さいほど、動き出しと止まりが緩やか
+const AIR_ACCELERATION := 8.0  # 空中では、向きや速さを変えにくい
 const TURN_SPEED := 12.0  # 体が進む向きへ回る速さ
+const JUMP_HEIGHT := 1.2  # ジャンプの高さ (m)
+const COYOTE_TIME := 0.12  # 地面を離れてから、まだ跳べる時間 (秒)
+const JUMP_BUFFER := 0.12  # 着地の少し前に押しても、着地した時に跳べる時間 (秒)
 const MOUSE_SENSITIVITY := 0.002
 const STICK_LOOK_SPEED := 2.6  # 右スティックを倒しきった時の、視点の回る速さ (ラジアン/秒)
 const PITCH_MIN := deg_to_rad(-60.0)  # 見下ろす向き
 const PITCH_MAX := deg_to_rad(30.0)  # 見上げる向き
-const HIDE_MODEL_DISTANCE := 0.9  # カメラがこれより体に近い時は、体を隠す (視界を塞がないように)
+const SHOULDER_OFFSET := 0.6  # カメラを肩越しに右へずらす量 (m)
+const SHOULDER_MARGIN := 0.3  # 右に壁がある時、壁との間に空ける余白 (m)
+const SHOULDER_SPEED := 12.0  # ずれが縮む、元に戻る速さ
+const HIDE_MODEL_DISTANCE := 0.9  # カメラがこれより体に近づいたら、体を隠す (視界を塞がないように)
+const SHOW_MODEL_DISTANCE := 1.1  # 隠したあと、これより離れたら、また見せる (境目でちらつかないように)
+const RUN_FOV_BOOST := 8.0  # 走っている間、視野を広げる量 (度)。速さを感じやすくする
+const FOV_SPEED := 6.0
 const FALL_LIMIT := -20.0
 const RESCAN_SECONDS := 1.5
 const REST_DISTANCE := 2.5
@@ -22,6 +32,12 @@ var rescanning := false
 var nearby_bonfire: Node3D
 var message_id := 0
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
+var jump_velocity: float = sqrt(2.0 * gravity * JUMP_HEIGHT)
+
+var _coyote := 0.0
+var _buffer := 0.0
+var _model_hidden := false
+var _base_fov := 75.0
 
 @onready var model: Node3D = $Model
 @onready var pivot: Node3D = $CameraPivot
@@ -35,6 +51,8 @@ func _ready() -> void:
 	InputActions.ensure()
 	spawn_position = global_position
 	arm.add_excluded_object(get_rid())  # カメラが、自分の体にぶつからないようにする
+	arm.position.x = SHOULDER_OFFSET
+	_base_fov = camera.fov
 	prompt.text = "E: 休む"
 	prompt.visible = false
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -71,16 +89,27 @@ func _physics_process(delta: float) -> void:
 	if stick != Vector2.ZERO:
 		look(-stick.x * STICK_LOOK_SPEED * delta, -stick.y * STICK_LOOK_SPEED * delta)
 
-	if not is_on_floor():
+	# 重力とジャンプ。地面を離れた直後 (コヨーテタイム) と、着地の直前 (先行入力) でも跳べる
+	var on_floor := is_on_floor()
+	_coyote = COYOTE_TIME if on_floor else _coyote - delta
+	_buffer = JUMP_BUFFER if Input.is_action_just_pressed("jump") else _buffer - delta
+	if not on_floor:
 		velocity.y -= gravity * delta
+	if _buffer > 0.0 and _coyote > 0.0:
+		velocity.y = jump_velocity
+		_buffer = 0.0
+		_coyote = 0.0
 
-	# 移動はカメラの向き (左右の回転だけ) が基準。アナログスティックは、倒した量が速さになる
+	# 移動はカメラの向き (左右の回転だけ) が基準。アナログスティックは、倒した量が速さになる。
+	# 水平の速度は、1 つのベクトルとして目標へ近づける (向きを急に変えても、軌道が曲がらない)
 	var input := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	var direction := Basis(Vector3.UP, pivot.rotation.y) * Vector3(input.x, 0.0, input.y)
-	var speed := RUN_SPEED if Input.is_action_pressed("run") else WALK_SPEED
-	var target := direction * speed
-	velocity.x = move_toward(velocity.x, target.x, ACCELERATION * delta)
-	velocity.z = move_toward(velocity.z, target.z, ACCELERATION * delta)
+	var running := Input.is_action_pressed("run") and direction.length() > 0.1
+	var target := Vector2(direction.x, direction.z) * (RUN_SPEED if Input.is_action_pressed("run") else WALK_SPEED)
+	var accel := ACCELERATION if on_floor else AIR_ACCELERATION
+	var horizontal := Vector2(velocity.x, velocity.z).move_toward(target, accel * delta)
+	velocity.x = horizontal.x
+	velocity.z = horizontal.y
 
 	# 体を進む向きへ回す。立ち止まっている間は、向きを保つ
 	if direction.length() > 0.1:
@@ -89,7 +118,7 @@ func _physics_process(delta: float) -> void:
 
 	move_and_slide()
 
-	model.visible = arm.get_hit_length() > HIDE_MODEL_DISTANCE
+	_update_camera(delta, running)
 	_update_nearby_bonfire()
 
 	if global_position.y < FALL_LIMIT:
@@ -100,6 +129,33 @@ func _physics_process(delta: float) -> void:
 func look(yaw: float, pitch: float) -> void:
 	pivot.rotation.y += yaw
 	pivot.rotation.x = clampf(pivot.rotation.x + pitch, PITCH_MIN, PITCH_MAX)
+
+
+# カメラまわりの更新: 肩越しのずれ、体を隠す、走っている時の視野
+func _update_camera(delta: float, running: bool) -> void:
+	# 肩越しのずれは、見た目だけでなく、壁よけの起点そのものをずらす (壁の中に視点が入らない)。
+	# 右に壁があれば、そこまでの距離に合わせて縮める
+	var origin := pivot.global_position
+	var right := pivot.global_transform.basis.x
+	var exclude: Array[RID] = [get_rid()]
+	var query := PhysicsRayQueryParameters3D.create(origin, origin + right * (SHOULDER_OFFSET + SHOULDER_MARGIN), arm.collision_mask, exclude)
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	var offset := SHOULDER_OFFSET
+	if not hit.is_empty():
+		offset = clampf(origin.distance_to(hit.position) - SHOULDER_MARGIN, 0.0, SHOULDER_OFFSET)
+	arm.position.x = lerpf(arm.position.x, offset, clampf(SHOULDER_SPEED * delta, 0.0, 1.0))
+
+	# カメラが体に近すぎる時は、体を隠す。隠す距離と戻す距離をずらして、境目でちらつかないようにする
+	var distance := arm.get_hit_length()
+	if _model_hidden and distance > SHOW_MODEL_DISTANCE:
+		_model_hidden = false
+	elif not _model_hidden and distance < HIDE_MODEL_DISTANCE:
+		_model_hidden = true
+	model.visible = not _model_hidden
+
+	# 走っている間は、視野を広げて、速さを感じやすくする
+	var fov := _base_fov + (RUN_FOV_BOOST if running else 0.0)
+	camera.fov = lerpf(camera.fov, fov, clampf(FOV_SPEED * delta, 0.0, 1.0))
 
 
 # 近くにある一番近い篝火を探して、「休む」の案内を出す

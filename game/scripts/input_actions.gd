@@ -4,6 +4,7 @@ extends RefCounted
 # ゲームの処理は、キーではなく操作の名前 (move_forward など) を見る。
 # 割り当ては、ここに足せば、どの処理も変えずに増やせる (コントローラーも同じ)
 
+# スティックの遊び。この値より小さい傾きは、入力としない (キーボードのキーには関係しない)
 const DEADZONE := 0.2
 
 # 操作ごとに、キーボードのキー (物理キー)、コントローラーの軸 [軸, 向き]、ボタンを並べる。
@@ -18,6 +19,7 @@ const ACTIONS := {
 	"look_left": {"keys": [], "axes": [[JOY_AXIS_RIGHT_X, -1.0]], "buttons": []},
 	"look_right": {"keys": [], "axes": [[JOY_AXIS_RIGHT_X, 1.0]], "buttons": []},
 	"run": {"keys": [KEY_SHIFT], "axes": [], "buttons": [JOY_BUTTON_B]},
+	"jump": {"keys": [KEY_SPACE], "axes": [], "buttons": [JOY_BUTTON_X]},
 	"rest": {"keys": [KEY_E], "axes": [], "buttons": [JOY_BUTTON_A]},
 }
 

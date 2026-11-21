@@ -5,6 +5,7 @@
 # そのままだと、壊れたテストが「成功」に見えるので、出力も見て、次の場合は失敗にする。
 #   - 終了コードが 0 でない (テストの失敗)
 #   - スクリプトのエラー、読み込みの失敗が出ている
+#   - FAIL の行がある (終了コードが 0 でも、失敗した項目があれば失敗にする)
 #   - PASS が 1 件もない (テストが 1 つも動いていない)
 name="$1"
 if [ -z "$name" ]; then
@@ -25,6 +26,10 @@ case "$output" in
     exit 1
     ;;
 esac
+if printf '%s\n' "$output" | grep -q '^FAIL '; then
+  echo "NG: 失敗した項目があります ($name)"
+  exit 1
+fi
 case "$output" in
   *"PASS "*) ;;
   *)
