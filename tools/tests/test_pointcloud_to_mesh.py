@@ -2,15 +2,7 @@ import numpy as np
 import pytest
 
 import pointcloud_to_mesh as p2m
-
-
-def synthetic_cloud(seed: int = 0) -> np.ndarray:
-    """床 (20m x 20m) と壁 (x=10、高さ 3m) に、離れた場所のノイズ点を足した点群。"""
-    rng = np.random.default_rng(seed)
-    floor = np.column_stack([rng.uniform(0, 20, 40000), rng.uniform(0, 20, 40000), rng.normal(0, 0.01, 40000)])
-    wall = np.column_stack([rng.normal(10, 0.01, 8000), rng.uniform(0, 20, 8000), rng.uniform(0, 3, 8000)])
-    noise = rng.uniform([0, 0, 5], [20, 20, 8], (30, 3))  # 宙に浮いた点
-    return np.concatenate([floor, wall, noise])
+from sample_cloud import synthetic_cloud
 
 
 def test_single_voxel_is_a_closed_cube_with_outward_normals():

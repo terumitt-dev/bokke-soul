@@ -28,3 +28,9 @@ steps:
     image: barichello/godot-ci:4.7.2
     commands:
       - godot --headless --path game --script res://tests/walk_test.gd
+
+  # 点群から作ったメッシュ (GLB) を読み込んだ世界を、歩けることの動作テスト
+  - name: world-test
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - godot --headless --path game --script res://tests/world_test.gd
