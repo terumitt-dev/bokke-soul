@@ -14,3 +14,7 @@ __pycache__/
 .venv/
 
 .pytest_cache/
+
+# 変換後のデータ (ローカル確認用。本番は別の保管先)
+data/processed/*
+!data/processed/.gitkeep

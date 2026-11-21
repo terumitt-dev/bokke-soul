@@ -1,6 +1,11 @@
 # tools
 
-点群を、Godot で歩けるメッシュ (GLB) に変換するスクリプト。
+点群や標高グリッドを、Godot で歩けるメッシュ (GLB) に変換するスクリプト。
+
+| スクリプト | 入力 | 向いているデータ |
+|---|---|---|
+| `pointcloud_to_mesh.py` | LAS / LAZ / PLY の点群 | 建物や壁などの立体。ボクセルの表面にするので角ばる |
+| `dem_to_mesh.py` | 「東 北 標高」の等間隔グリッド (テキスト) | 地形。格子を三角形にするので滑らかで、面が少ない |
 
 ## セットアップ
 
@@ -51,3 +56,23 @@ cd tools && ../.venv/bin/python make_sample_world.py
 ```
 
 Godot では `scenes/world_sample.tscn` で歩けます (`godot --path game res://scenes/world_sample.tscn`)。
+
+## 標高グリッドの変換
+
+```
+.venv/bin/python tools/dem_to_mesh.py data/raw/xxx_DEM.txt data/processed/terrain.glb --stride 2
+```
+
+`--stride` は格子を何個おきに使うか。0.5m 間隔のデータを `--stride 2` にすると 1m 間隔になり、面の数が約 4 分の 1 になります。
+
+変換後のデータは `data/processed/` に置きます (git の管理外)。
+
+## 変換したデータで歩く
+
+取り込みを通さず、起動時に GLB の場所を渡します。データをリポジトリに入れずに試せます。
+
+```
+godot --path game res://scenes/world_local.tscn -- --world=/絶対パス/terrain.glb
+```
+
+世界の中央の上空から降りて、地面に立ちます。

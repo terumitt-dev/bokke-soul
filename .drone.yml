@@ -34,3 +34,9 @@ steps:
     image: barichello/godot-ci:4.7.2
     commands:
       - godot --headless --path game --script res://tests/world_test.gd
+
+  # 実行時に指定した GLB を読み込んで歩けることの動作テスト (リポジトリ内のサンプルを使う)
+  - name: world-local-test
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - godot --headless --path game --script res://tests/world_local_test.gd
