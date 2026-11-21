@@ -133,6 +133,12 @@ def to_godot_axes(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     return mesh
 
 
+def from_godot_coords(vertices: np.ndarray, origin: np.ndarray) -> np.ndarray:
+    """GLB の頂点を、元の測量座標に戻す。(x, y, z) → (x, -z, y) に直してから origin を足す。"""
+    v = np.asarray(vertices, dtype=np.float64)
+    return np.column_stack([v[:, 0], -v[:, 2], v[:, 1]]) + np.asarray(origin)
+
+
 def convert(
     points: np.ndarray,
     voxel_size: float,
@@ -173,7 +179,11 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     mesh.export(args.output)
     # 元の座標に戻したい時のために、原点を別ファイルに残す
-    meta = {"origin": [float(x) for x in mesh.metadata["origin"]], "voxel_size": mesh.metadata["voxel_size"]}
+    meta = {
+        "origin": [float(x) for x in mesh.metadata["origin"]],
+        "voxel_size": mesh.metadata["voxel_size"],
+        "axes": "GLB の (x, y, z) は、測量座標の (x, z, -y)。戻すには (x, -z, y) に直してから origin を足す",
+    }
     args.output.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     print(f"書き出し: {args.output} (頂点 {len(mesh.vertices):,} / 面 {len(mesh.faces):,})")
     print(f"元の原点: {meta['origin']} (同じ場所に {args.output.with_suffix('.json').name} として保存)")

@@ -24,7 +24,7 @@ python3 -m venv .venv
 
 対応形式は LAS / LAZ / PLY。
 
-出力は GLB と、同じ場所の `.json` (元の原点とボクセルの大きさ)。GLB は原点付近に作るので、実際の座標に戻したい時は `.json` の `origin` を足します。
+出力は GLB と、同じ場所の `.json` (元の原点とボクセルの大きさ)。GLB は原点付近に作り、軸も Godot 向け (Y 上向き) に入れ替えています。実際の測量座標に戻したい時は、GLB の頂点 `(x, y, z)` を `(x, -z, y)` に直してから、`.json` の `origin` を足します。`pointcloud_to_mesh.from_godot_coords(vertices, origin)` がこの計算をします。
 
 ## 変換の中身
 

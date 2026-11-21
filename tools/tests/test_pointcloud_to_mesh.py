@@ -92,3 +92,16 @@ def test_oversized_grid_is_rejected():
 def test_unsupported_format_is_rejected(tmp_path):
     with pytest.raises(ValueError, match="未対応の形式"):
         p2m.load_points(tmp_path / "cloud.xyz")
+
+
+def test_vertices_can_be_restored_to_survey_coordinates():
+    points = synthetic_cloud() + np.array([-35_000.0, 3_000.0, 40.0])
+    mesh = p2m.convert(points, voxel_size=0.5)
+    restored = p2m.from_godot_coords(mesh.vertices, mesh.metadata["origin"])
+    # 元の点群の範囲に、ボクセル 1 つ分の余裕を足した中に収まる (軸が混ざると外れる)
+    low, high = points.min(axis=0) - 0.5, points.max(axis=0) + 0.5
+    assert (restored.min(axis=0) >= low).all()
+    assert (restored.max(axis=0) <= high).all()
+    # 床の高さ (z) と壁の位置 (x) も、元の軸のまま
+    assert restored[:, 2].min() == pytest.approx(points[:, 2].min(), abs=0.5)
+    assert restored[:, 0].max() == pytest.approx(points[:, 0].max(), abs=1.0)
