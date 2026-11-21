@@ -1,0 +1,24 @@
+# =========================
+# CI Pipeline
+# =========================
+kind: pipeline
+type: kubernetes
+name: ci
+
+trigger:
+  event: [push, pull_request]
+  branch: [main]
+
+node_selector:
+  node-role: drone
+tolerations:
+  - key: dedicated
+    value: drone
+    effect: NoSchedule
+
+steps:
+  # Godot プロジェクトとして読み込めることを確認する。シークレットは参照しない。
+  - name: godot-import
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - godot --headless --path game --import --quit
