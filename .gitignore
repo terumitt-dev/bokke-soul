@@ -1,0 +1,14 @@
+.DS_Store
+
+# 元の点群データ(大きく、再配布条件があるため含めない)
+data/raw/*
+!data/raw/.gitkeep
+
+# Godot
+game/.godot/
+game/export/
+*.translation
+
+# Python
+__pycache__/
+.venv/
