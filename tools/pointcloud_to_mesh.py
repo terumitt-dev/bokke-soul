@@ -161,6 +161,21 @@ def convert(
     return mesh
 
 
+def write_outputs(mesh: trimesh.Trimesh, output: Path) -> None:
+    """GLB と、元の座標に戻すための原点を書いた .json を書き出す。"""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    mesh.export(output)
+    meta = {
+        "origin": [float(x) for x in mesh.metadata["origin"]],
+        "axes": "GLB の (x, y, z) は、測量座標の (x, z, -y)。戻すには (x, -z, y) に直してから origin を足す",
+    }
+    meta.update({k: v for k, v in mesh.metadata.items() if k != "origin"})
+    sidecar = output.with_suffix(".json")
+    sidecar.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"書き出し: {output} (頂点 {len(mesh.vertices):,} / 面 {len(mesh.faces):,})")
+    print(f"元の原点: {meta['origin']} (同じ場所に {sidecar.name} として保存)")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="点群を GLB メッシュに変換する")
     parser.add_argument("input", type=Path, help="入力 (LAS / LAZ / PLY)")
@@ -176,17 +191,7 @@ def main() -> None:
     points = load_points(args.input)
     print(f"読み込み: {len(points):,} 点")
     mesh = convert(points, args.voxel, args.min_points, args.min_component, tuple(args.crop) if args.crop else None)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    mesh.export(args.output)
-    # 元の座標に戻したい時のために、原点を別ファイルに残す
-    meta = {
-        "origin": [float(x) for x in mesh.metadata["origin"]],
-        "voxel_size": mesh.metadata["voxel_size"],
-        "axes": "GLB の (x, y, z) は、測量座標の (x, z, -y)。戻すには (x, -z, y) に直してから origin を足す",
-    }
-    args.output.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
-    print(f"書き出し: {args.output} (頂点 {len(mesh.vertices):,} / 面 {len(mesh.faces):,})")
-    print(f"元の原点: {meta['origin']} (同じ場所に {args.output.with_suffix('.json').name} として保存)")
+    write_outputs(mesh, args.output)
 
 
 if __name__ == "__main__":
