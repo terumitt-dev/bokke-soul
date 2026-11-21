@@ -76,3 +76,15 @@ godot --path game res://scenes/world_local.tscn -- --world=/絶対パス/terrain
 ```
 
 世界の中央の上空から降りて、地面に立ちます。
+
+## 出典の表示
+
+`--credit` と `--license-url` を付けると、GLB の隣の `.json` に出典が書かれ、ゲームのタイトル画面の隅とクレジットに表示されます。出典の表示が必要なデータ (CC BY など) は、必ず付けてください。
+
+```
+.venv/bin/python tools/dem_to_mesh.py data/raw/xxx_DEM.txt data/processed/terrain.glb \
+  --credit "VIRTUAL SHIZUOKA (静岡県) を加工して作成 / CC BY 4.0" \
+  --license-url https://creativecommons.org/licenses/by/4.0/
+```
+
+出典の文は、データごとに `docs/data-sources.md` の「出典表示」に合わせます。

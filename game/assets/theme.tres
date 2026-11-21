@@ -1,0 +1,23 @@
+[gd_resource type="Theme" load_steps=6 format=3]
+
+[ext_resource type="FontFile" path="res://assets/fonts/Cinzel.ttf" id="1_cinzel"]
+[ext_resource type="FontFile" path="res://assets/fonts/ZenOldMincho-Regular.ttf" id="2_zen"]
+
+[sub_resource type="FontVariation" id="FontVariation_default"]
+base_font = ExtResource("1_cinzel")
+fallbacks = [ExtResource("2_zen")]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_button"]
+
+[resource]
+default_font = SubResource("FontVariation_default")
+default_font_size = 22
+Button/colors/font_color = Color(0.82, 0.78, 0.70, 0.85)
+Button/colors/font_focus_color = Color(1, 0.96, 0.86, 1)
+Button/colors/font_hover_color = Color(1, 0.96, 0.86, 1)
+Button/colors/font_pressed_color = Color(1, 0.96, 0.86, 1)
+Button/font_sizes/font_size = 28
+Button/styles/focus = SubResource("StyleBoxEmpty_button")
+Button/styles/hover = SubResource("StyleBoxEmpty_button")
+Button/styles/normal = SubResource("StyleBoxEmpty_button")
+Button/styles/pressed = SubResource("StyleBoxEmpty_button")
