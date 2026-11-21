@@ -71,4 +71,6 @@ seed=0                    ; 天気の並びを決める種
 
 macOS では `~/Library/Application Support/Godot/app_userdata/bokke-soul/settings.cfg` です。
 
+夜は、太陽の反対側から月明かりが当たり、篝火は暗いほど強く光ります。見た目の調整 (色の鮮やかさ、太陽、環境光、霧、月明かり) は `game/scripts/color_grade.gd` の `look()` で決めています。
+
 開発ビルドでは、`T` キーで時刻を 3 時間ずつ飛ばし、`Y` キーで天気を「自動 → 晴れ → 曇り → 砂塵 → 砂嵐」と切り替えられます (画面の左上に時刻と天気が出ます)。製品ビルドでは無効です。

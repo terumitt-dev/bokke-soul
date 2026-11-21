@@ -39,6 +39,7 @@ func _initialize() -> void:
 	_test_time()
 	_test_settings()
 	_test_palette()
+	_test_moon_and_bonfire()
 	await _test_scene()
 	quit(1 if failures.size() > 0 else 0)
 
@@ -145,6 +146,22 @@ func _test_palette() -> void:
 	check(SkyPalette.sun_energy(6.5) < SkyPalette.sun_energy(7.0), "日の出の直後は、光が徐々に強くなる")
 
 
+func _start_default_look() -> Node:
+	var scene: Node = load("res://scenes/world_local.tscn").instantiate()
+	scene.get_node("World").world_path = "res://assets/sample_world.glb"
+	var s := _settings("fixed", 60.0, 7.0, 0.0)  # 0 時の夜
+	scene.get_node("DayNight").settings = s
+	root.add_child(scene)
+	return scene
+
+
+func _test_moon_and_bonfire() -> void:
+	check(SkyPalette.moon_level(0.0) > 0.99 and SkyPalette.moon_level(12.0) < 0.001, "月は夜に出て、昼は出ない")
+	check(SkyPalette.moon_level(6.0) < 0.001 and SkyPalette.moon_level(18.0) < 0.001, "日の出と日没の瞬間は、月も水平線にあり、光がない")
+	check(SkyPalette.moon_level(7.0) < 0.001 and SkyPalette.moon_level(17.0) < 0.001, "太陽が出ている間は、月の光は出ない")
+	check(SkyPalette.moon_level(19.0) > 0.0 and SkyPalette.moon_level(5.0) > 0.0, "日が沈んだあと、明ける前は、月の光がある")
+
+
 func _test_scene() -> void:
 	var scene: Node = load("res://scenes/world_local.tscn").instantiate()
 	scene.get_node("World").world_path = "res://assets/sample_world.glb"
@@ -154,6 +171,8 @@ func _test_scene() -> void:
 
 	var day_night: DayNight = scene.get_node("DayNight")
 	var sun: DirectionalLight3D = scene.get_node("Light")
+	day_night.grade = ColorGrade.new()  # 昼夜そのものを確かめる。見た目の調整は、何も変えない値にする
+	day_night._apply()
 	check(day_night.environment.background_mode == Environment.BG_SKY, "空が昼夜の空になる")
 	check(sun.light_energy > 1.0 and sun.visible, "昼は太陽が点く")
 	# 真上 (x = -90 度) は角度の境界なので、向きのベクトルで確かめる。光は真下に近い向きに進む
@@ -167,5 +186,43 @@ func _test_scene() -> void:
 	check(day_night.time.hour < 1.0 or day_night.time.hour > 23.9, "12 時から 12 時間飛ばすと、0 時になる")
 	check(not sun.visible and near(sun.light_energy, 0.0), "夜は太陽が消える")
 	check(day_night.environment.fog_density > 0.01, "夜は霧が濃い")
+
+	# 月明かり: 既定では出さない。強さを与えると、夜に太陽の反対側から青白く照らす
+	var moon: DirectionalLight3D = day_night.moon
+	check(not moon.visible, "月明かりの強さが 0 なら、夜でも月の光は出ない")
+	day_night.grade = ColorGrade.make(1.0, 1.0, 1.0, 1.0, 0.3)
+	day_night._apply()
+	check(moon.visible and near(moon.light_energy, 0.3, 0.05), "月明かりの強さを与えると、夜に月の光が出る (0 時)")
+	check((-moon.global_transform.basis.z).y < -0.9, "0 時の月は高い所にあり、下へ向けて照らす")
+	day_night.time.jump(12.0)
+	day_night._apply()
+	check(not moon.visible, "昼 (12 時) は、月の光は出ない")
+	day_night.time.jump(12.0)
+
+	# 篝火は、暗いほど強く、遠くまで光る
+	var bonfire: Node3D = load("res://scenes/bonfire.tscn").instantiate()
+	scene.add_child(bonfire)
+	day_night._apply()  # 夜 (0 時): 暗さを篝火へ知らせる
+	for i in 3:
+		await process_frame
+	var night_energy: float = bonfire.light.light_energy
+	var night_range: float = bonfire.light.omni_range
+	check(bonfire.darkness > 0.9, "夜は、篝火へ暗さが伝わる")
+	day_night.time.jump(12.0)
+	day_night._apply()
+	for i in 3:
+		await process_frame
+	check(bonfire.darkness < 0.1, "昼は、篝火の暗さが 0 に近い")
+	check(night_energy > bonfire.light.light_energy * 1.5 and night_range > bonfire.light.omni_range * 1.5, "篝火は、夜の方が強く、遠くまで光る")
 	scene.queue_free()
+	await process_frame
+
+	# このゲームの既定の見た目 (B と強い月明かり) が、場面に入る
+	var look_scene := _start_default_look()
+	await process_frame
+	var look: DayNight = look_scene.get_node("DayNight")
+	check(near(look.grade.saturation, 0.55) and near(look.grade.moon, 0.6), "既定の見た目は、くすんだ色 (彩度 0.55) と、強い月明かり (0.6)")
+	check(look.moon.visible and near(look.moon.light_energy, 0.6, 0.05), "既定では、夜に月明かりが出る (0 時)")
+	check(WorldLoader.terrain_color.is_equal_approx(WorldLoader.DEFAULT_TERRAIN_COLOR), "地形の色は、既定の砂の色")
+	look_scene.queue_free()
 	await process_frame

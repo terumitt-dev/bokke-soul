@@ -6,6 +6,7 @@ extends Node
 # 開発ビルドでは、T キーで時刻を 3 時間ずつ、Y キーで天気を切り替えられる
 
 const SUN_YAW := -30.0
+const MOON_YAW_OFFSET := 55.0  # 月は、太陽と少しずらした向きから照らす
 const DEV_JUMP_HOURS := 3.0
 
 @export var environment_path: NodePath = ^"../WorldEnvironment"
@@ -17,8 +18,11 @@ var settings: GameSettings
 var time: TimeOfDay
 var environment: Environment
 var sky_material: ProceduralSkyMaterial
+var grade := ColorGrade.look()  # 見た目の最終調整。既定はこのゲームの見た目 (ColorGrade.look)
 var forced_weather := ""  # 開発用。種類の id を入れると、その天気に固定する
 var weather: Dictionary  # いまの天気の値 (Weather.params_at)
+
+var moon: DirectionalLight3D  # 月明かり。太陽の反対側から、青白く照らす
 
 var _sun: DirectionalLight3D
 var _clock: Label
@@ -30,6 +34,11 @@ func _ready() -> void:
 	time = TimeOfDay.new(settings)
 	environment = (get_node(environment_path) as WorldEnvironment).environment
 	_sun = get_node(sun_path)
+	moon = DirectionalLight3D.new()
+	moon.name = "Moon"
+	moon.light_color = SkyPalette.MOON_COLOR
+	moon.visible = false
+	add_child(moon)
 	_clock = get_node_or_null(clock_path)
 	_setup_sky()
 	_apply()
@@ -78,20 +87,30 @@ func _apply() -> void:
 	var haze: float = weather.haze
 	var haze_color: Color = weather.haze_color
 
-	var horizon := Weather.tint(palette.horizon, haze_color, haze)
-	sky_material.sky_top_color = Weather.tint(palette.top, haze_color, haze)
+	var horizon := grade.apply_saturation(Weather.tint(palette.horizon, haze_color, haze))
+	sky_material.sky_top_color = grade.apply_saturation(Weather.tint(palette.top, haze_color, haze))
 	sky_material.sky_horizon_color = horizon
 	sky_material.ground_horizon_color = horizon
 	sky_material.ground_bottom_color = horizon.darkened(0.5)
-	environment.fog_light_color = Weather.tint(palette.fog, haze_color, haze)
-	environment.fog_density = float(palette.fog_density) * float(weather.fog_mult)
-	environment.ambient_light_color = (palette.ambient as Color) * float(weather.ambient_mult)
+	environment.fog_light_color = grade.apply_saturation(Weather.tint(palette.fog, haze_color, haze))
+	environment.fog_density = float(palette.fog_density) * float(weather.fog_mult) * grade.fog
+	environment.ambient_light_color = grade.apply_saturation(palette.ambient as Color) * float(weather.ambient_mult) * grade.ambient
 
-	var energy := SkyPalette.sun_energy(hour) * float(weather.sun_mult)
-	_sun.light_color = palette.sun_color
+	var energy := SkyPalette.sun_energy(hour) * float(weather.sun_mult) * grade.sun
+	_sun.light_color = grade.apply_saturation(palette.sun_color)
 	_sun.light_energy = energy
 	_sun.visible = energy > 0.001
 	_sun.rotation_degrees = Vector3(-(hour - 6.0) * SkyPalette.SUN_DEGREES_PER_HOUR, SUN_YAW, 0.0)
+
+	# 月明かり。天気で弱まる (砂嵐の夜は、月もかすむ)。太陽が出ている間は消える
+	var moon_energy := SkyPalette.moon_level(hour) * grade.moon * float(weather.sun_mult)
+	moon.light_energy = moon_energy
+	moon.visible = moon_energy > 0.001
+	moon.rotation_degrees = Vector3(-(hour - 18.0) * SkyPalette.SUN_DEGREES_PER_HOUR, SUN_YAW + MOON_YAW_OFFSET, 0.0)
+
+	# 篝火は、暗いほど強く、遠くまで光る (昼は目立たず、夜は「確かな場所」として目立つ)
+	var darkness := 1.0 - clampf(energy, 0.0, 1.0)
+	get_tree().call_group("bonfire", "set_darkness", darkness)
 
 	if _clock:
 		_clock.text = "%s  %s" % [time.format(), weather.name]
