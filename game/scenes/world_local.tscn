@@ -5,13 +5,6 @@
 [ext_resource type="Script" path="res://scripts/day_night.gd" id="3_daynight"]
 
 [sub_resource type="Environment" id="Environment_dark"]
-background_mode = 1
-background_color = Color(0.02, 0.02, 0.03, 1)
-ambient_light_source = 2
-ambient_light_color = Color(0.25, 0.27, 0.32, 1)
-fog_enabled = true
-fog_light_color = Color(0.02, 0.02, 0.03, 1)
-fog_density = 0.04
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
 radius = 0.4

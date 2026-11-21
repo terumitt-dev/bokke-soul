@@ -24,6 +24,7 @@ func _settings(mode: String, day_minutes: float = 60.0, start: float = 7.0, fixe
 	s.day_length_minutes = day_minutes
 	s.start_hour = start
 	s.fixed_hour = fixed
+	s.weather_enabled = false  # ここでは昼夜だけを確かめる。天気は weather_test で確かめる
 	return s
 
 
@@ -50,6 +51,7 @@ func _test_time() -> void:
 	check(near(t.hour, 19.0), "1 日 60 分なら、30 分で 12 時間進む")
 	t.advance(1800.0)
 	check(near(t.hour, 7.0), "24 時を過ぎると 0 時に戻る")
+	check(near(t.total_hours, 31.0), "通しの時間は 24 時で折り返さない (7 時から 1 日進むと 31)")
 
 	# 1 日 5 時間 (300 分): 150 分で半日
 	var slow := TimeOfDay.new(_settings("accelerated", 300.0, 6.0))
@@ -66,6 +68,17 @@ func _test_time() -> void:
 	real.advance(0.0)
 	var diff := absf(real.hour - TimeOfDay.realtime_hour())
 	check(minf(diff, 24.0 - diff) < 0.01, "realtime は、パソコンの時刻に合う")
+
+	# 昼夜はローカル時刻で変わるが、天気に使う時間は、タイムゾーンに依存しない (世界共通の時刻)
+	var tokyo := TimeOfDay.new(_settings("realtime"), 540)  # UTC+9
+	var utc := TimeOfDay.new(_settings("realtime"), 0)
+	var new_york := TimeOfDay.new(_settings("realtime"), -300)  # UTC-5
+	check(near(tokyo.weather_hours, utc.weather_hours, 0.01) and near(new_york.weather_hours, utc.weather_hours, 0.01), "実時間では、天気に使う時間はタイムゾーンによらず同じ")
+	var hour_gap := fposmod(tokyo.hour - utc.hour, 24.0)
+	check(near(hour_gap, 9.0, 0.01), "実時間の昼夜は、タイムゾーンに合わせてずれる (東京は UTC より 9 時間進む)")
+	check(near(tokyo.total_hours - utc.total_hours, 9.0, 0.01), "ローカルの通しの時間は、タイムゾーンのずれを含む")
+	var accel := TimeOfDay.new(_settings("accelerated", 60.0, 7.0))
+	check(near(accel.weather_hours, accel.total_hours), "実時間以外では、天気に使う時間は通しの時間と同じ")
 
 	# 時刻の飛ばし (開発用) は、どの方式でも効く
 	var jump := TimeOfDay.new(_settings("fixed", 60.0, 7.0, 22.0))
@@ -86,6 +99,18 @@ func _test_settings() -> void:
 	var bad := GameSettings.load_from(TMP_SETTINGS)
 	check(bad.time_mode == "accelerated" and near(bad.day_length_minutes, 60.0), "不正な方式と 1 日の長さは、既定値にする")
 	check(near(bad.start_hour, 7.0) and near(bad.fixed_hour, 12.0), "不正な時刻 (範囲外、文字) は、既定値にする")
+
+	var weather_cfg := ConfigFile.new()
+	weather_cfg.set_value("weather", "enabled", false)
+	weather_cfg.set_value("weather", "seed", 42)
+	weather_cfg.save(TMP_SETTINGS)
+	var weather_ok := GameSettings.load_from(TMP_SETTINGS)
+	check(not weather_ok.weather_enabled and weather_ok.weather_seed == 42, "天気の設定 (enabled、seed) を読む")
+	weather_cfg.set_value("weather", "enabled", "yes")
+	weather_cfg.set_value("weather", "seed", 1.5)
+	weather_cfg.save(TMP_SETTINGS)
+	var weather_bad := GameSettings.load_from(TMP_SETTINGS)
+	check(weather_bad.weather_enabled and weather_bad.weather_seed == 0, "不正な天気の設定 (文字、小数) は、既定値にする")
 
 	_write_cfg({"day_length_minutes": 0.0})
 	check(near(GameSettings.load_from(TMP_SETTINGS).day_length_minutes, 60.0), "1 日の長さが 0 なら、既定値にする (0 での割り算を防ぐ)")
@@ -111,11 +136,13 @@ func _test_palette() -> void:
 		previous = current
 	check(worst < 0.02, "1 分あたりの変化が小さい (最大 %.4f)" % worst)
 
-	# 夜に太陽は出ない (地平線の下にある時間は、エネルギーが 0)
+	# 太陽が地平線の下にある間は、光がない (下から地面を照らさない)。日の出前後と日没前後もここに入る
 	var dark_hours_ok := true
-	for hour in [0.0, 2.0, 4.0, 19.0, 21.0, 23.0]:
-		dark_hours_ok = dark_hours_ok and SkyPalette.sample(hour).sun_energy < 0.001
-	check(dark_hours_ok, "日の出前と日没後は、太陽の光がない")
+	for hour in [0.0, 2.0, 4.0, 5.5, 6.0, 18.0, 18.2, 19.0, 21.0, 23.0]:
+		dark_hours_ok = dark_hours_ok and SkyPalette.sun_energy(hour) < 0.001
+	check(dark_hours_ok, "日の出前と日没後 (5.5 時、18.2 時を含む) は、太陽の光がない")
+	check(SkyPalette.sun_energy(7.0) > 0.3 and SkyPalette.sun_energy(12.0) > 1.0, "日が昇ると光が出る")
+	check(SkyPalette.sun_energy(6.5) < SkyPalette.sun_energy(7.0), "日の出の直後は、光が徐々に強くなる")
 
 
 func _test_scene() -> void:
@@ -129,7 +156,8 @@ func _test_scene() -> void:
 	var sun: DirectionalLight3D = scene.get_node("Light")
 	check(day_night.environment.background_mode == Environment.BG_SKY, "空が昼夜の空になる")
 	check(sun.light_energy > 1.0 and sun.visible, "昼は太陽が点く")
-	check(sun.rotation_degrees.x < -80.0, "昼は太陽が高い所にある")
+	# 真上 (x = -90 度) は角度の境界なので、向きのベクトルで確かめる。光は真下に近い向きに進む
+	check((-sun.global_transform.basis.z).y < -0.9, "昼は太陽が高い所にある")
 	check(scene.get_node("HUD/Clock").text.begins_with("12:00"), "時計に 12:00 と出る")
 
 	# 時刻を 3 時間ずつ飛ばして、夜にする
