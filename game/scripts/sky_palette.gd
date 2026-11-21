@@ -61,6 +61,21 @@ const KEYS := [
 ]
 
 
+const SUN_DEGREES_PER_HOUR := 15.0  # 6 時に水平線、12 時に真上、18 時に水平線
+const SUN_FADE := 4.0  # 太陽の高さ (sin) がこの逆数に届くまでの間、光を徐々に強める
+
+
+# 太陽の高さ (-1〜1)。0 が水平線で、正なら地平線の上
+static func sun_height(hour: float) -> float:
+	return sin(deg_to_rad((hour - 6.0) * SUN_DEGREES_PER_HOUR))
+
+
+# 太陽の光の強さ。時刻ごとの値に、太陽の高さで絞りをかける。
+# 地平線の下では 0 (下から地面を照らさない)、日の出日の入りの直後は徐々に強くなる
+static func sun_energy(hour: float) -> float:
+	return float(sample(hour).sun_energy) * clampf(sun_height(hour) * SUN_FADE, 0.0, 1.0)
+
+
 # hour 時の値を返す。hour は 0〜24 (範囲外は 24 で折り返す)
 static func sample(hour: float) -> Dictionary:
 	var h := fposmod(hour, 24.0)
@@ -75,7 +90,9 @@ static func sample(hour: float) -> Dictionary:
 	return _blend(from, to, (h - from_hour) / (to_hour - from_hour))
 
 
-static func _blend(from: Dictionary, to: Dictionary, t: float) -> Dictionary:
+static func _blend(from: Dictionary, to: Dictionary, amount: float) -> Dictionary:
+	# 線形のままだと、時刻のキーで変化の速さが急に変わる。なめらかな曲線にする
+	var t := amount * amount * (3.0 - 2.0 * amount)
 	var result := {}
 	for key: String in from:
 		if key == "hour":

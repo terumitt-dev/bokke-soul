@@ -46,3 +46,9 @@ steps:
     image: barichello/godot-ci:4.7.2
     commands:
       - godot --headless --path game --script res://tests/day_night_test.gd
+
+  # 天気 (決まり方、なめらかな移り変わり、色味、場面への反映) の動作テスト
+  - name: weather-test
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - godot --headless --path game --script res://tests/weather_test.gd
