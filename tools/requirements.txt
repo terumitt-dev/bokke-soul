@@ -1,5 +1,5 @@
-numpy
-scipy
-laspy[lazrs]
-trimesh
-pytest
+# 下限は動作を確認したバージョン
+numpy>=2.5,<3
+scipy>=1.18,<2
+laspy[lazrs]>=2.7,<3
+trimesh>=5.2,<6

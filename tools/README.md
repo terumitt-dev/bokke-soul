@@ -6,7 +6,7 @@
 
 ```
 python3 -m venv .venv
-.venv/bin/pip install -r tools/requirements.txt
+.venv/bin/pip install -r tools/requirements-dev.txt
 ```
 
 ## 使い方
@@ -24,13 +24,15 @@ python3 -m venv .venv
 
 対応形式は LAS / LAZ / PLY。
 
+出力は GLB と、同じ場所の `.json` (元の原点とボクセルの大きさ)。GLB は原点付近に作るので、実際の座標に戻したい時は `.json` の `origin` を足します。
+
 ## 変換の中身
 
 1. 点を読み込む (必要なら範囲を切り出す)
 2. ボクセルに割り当て、点が少ないボクセルを捨てる
 3. つながりの小さい塊を消す
 4. 隣が空いているボクセルの面だけを四角形にして、外向きのメッシュを作る
-5. 測量データの Z 上向きを、Godot の Y 上向きに変換して GLB に書き出す
+5. 測量データの Z 上向きを、Godot の Y 上向きに変換して GLB に書き出す。座標は点群の最小値を原点にし、float32 の精度落ちを避ける
 
 見た目は角ばりますが、穴や法線の乱れが出にくく、当たり判定にそのまま使えます。
 

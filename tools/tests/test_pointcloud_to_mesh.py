@@ -45,8 +45,31 @@ def test_floor_and_wall_are_kept():
 def test_axes_are_converted_to_y_up():
     mesh = p2m.convert(synthetic_cloud(), voxel_size=0.5)
     assert mesh.is_winding_consistent
-    top_faces = mesh.face_normals[:, 1] > 0.9
-    assert top_faces.any()  # 床の上面が +Y を向く
+    # 最も高い位置にある面 (床の上面や壁の天面) は、全て +Y を向く
+    top = np.isclose(mesh.triangles_center[:, 1], mesh.bounds[1][1])
+    assert top.any()
+    assert (mesh.face_normals[top, 1] > 0.99).all()
+
+
+def test_converted_mesh_is_outward_facing():
+    # 変換後の法線が内向きだと、背面カリングで床が見えず、当たり判定も片面になる
+    mesh = p2m.convert(synthetic_cloud(), voxel_size=0.5)
+    assert mesh.volume > 0
+
+
+def test_converted_single_voxel_is_closed_and_outward():
+    points = np.random.default_rng(0).uniform(0, 1, (200, 3))
+    mesh = p2m.convert(points, voxel_size=1.0, min_points=1, min_component=1)
+    assert mesh.is_watertight
+    assert mesh.volume == pytest.approx(1.0)
+
+
+def test_mesh_is_centered_near_the_origin():
+    # 平面直角座標のように値が大きい点群でも、float32 の精度が落ちない位置に出力する
+    points = synthetic_cloud() + np.array([-35_000.0, 3_000.0, 40.0])
+    mesh = p2m.convert(points, voxel_size=0.5)
+    assert np.abs(mesh.bounds).max() < 100
+    assert mesh.metadata["origin"] == pytest.approx(points.min(axis=0))
 
 
 def test_crop_limits_the_area():

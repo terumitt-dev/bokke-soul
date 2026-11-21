@@ -10,6 +10,7 @@
 """
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -122,11 +123,13 @@ def surface_mesh(grid: np.ndarray, voxel_size: float, origin: np.ndarray) -> tri
 
 
 def to_godot_axes(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
-    """測量データの Z 上向きを、Godot の Y 上向きに変換する。(x, y, z) → (x, z, -y)"""
+    """測量データの Z 上向きを、Godot の Y 上向きに変換する。(x, y, z) → (x, z, -y)
+
+    この変換は回転 (行列式 +1) なので、面の巻き方向はそのまま保たれる。
+    """
     mesh = mesh.copy()
     v = mesh.vertices
     mesh.vertices = np.column_stack([v[:, 0], v[:, 2], -v[:, 1]])
-    mesh.faces = mesh.faces[:, ::-1]  # 軸の入れ替えで反転する巻き方向を戻す
     return mesh
 
 
@@ -144,7 +147,12 @@ def convert(
     grid = remove_small_components(to_grid(voxels), min_component)
     if not grid.any():
         raise ValueError("ノイズ除去で全て消えました。--min-component を下げてください")
-    return to_godot_axes(surface_mesh(grid, voxel_size, origin))
+    # 測量の座標は値が大きい (10^5 以上になることがある) ので、メッシュは原点付近に作る。
+    # float32 の精度落ちを避けるため。元の原点は metadata に残す
+    mesh = to_godot_axes(surface_mesh(grid, voxel_size, np.zeros(3)))
+    mesh.metadata["origin"] = origin
+    mesh.metadata["voxel_size"] = voxel_size
+    return mesh
 
 
 def main() -> None:
@@ -164,7 +172,11 @@ def main() -> None:
     mesh = convert(points, args.voxel, args.min_points, args.min_component, tuple(args.crop) if args.crop else None)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     mesh.export(args.output)
+    # 元の座標に戻したい時のために、原点を別ファイルに残す
+    meta = {"origin": [float(x) for x in mesh.metadata["origin"]], "voxel_size": mesh.metadata["voxel_size"]}
+    args.output.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     print(f"書き出し: {args.output} (頂点 {len(mesh.vertices):,} / 面 {len(mesh.faces):,})")
+    print(f"元の原点: {meta['origin']} (同じ場所に {args.output.with_suffix('.json').name} として保存)")
 
 
 if __name__ == "__main__":
