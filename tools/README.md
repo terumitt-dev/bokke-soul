@@ -41,3 +41,13 @@ python3 -m venv .venv
 ```
 cd tools && ../.venv/bin/python -m pytest
 ```
+
+## サンプルの世界
+
+人工の点群から、Godot で読み込みを確認するためのサンプル (`game/assets/sample_world.glb`) を作れます。
+
+```
+cd tools && ../.venv/bin/python make_sample_world.py
+```
+
+Godot では `scenes/world_sample.tscn` で歩けます (`godot --path game res://scenes/world_sample.tscn`)。
