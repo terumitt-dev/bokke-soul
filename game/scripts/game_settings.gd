@@ -15,6 +15,7 @@ extends RefCounted
 
 const PATH := "user://settings.cfg"
 const MODES := ["accelerated", "realtime", "fixed"]
+const POINT_MODES := ["mesh_and_points", "points_only", "off"]
 const MIN_DAY_MINUTES := 1.0
 const MAX_DAY_MINUTES := 10080.0  # 1 週間
 const MAX_SEED := 2147483647
@@ -25,6 +26,7 @@ var start_hour := 7.0
 var fixed_hour := 12.0
 var weather_enabled := true
 var weather_seed := 0
+var point_mode := "mesh_and_points"
 
 
 static func load_from(path: String = PATH) -> GameSettings:
@@ -48,6 +50,10 @@ static func load_from(path: String = PATH) -> GameSettings:
 	var world_seed: Variant = file.get_value("weather", "seed", "")
 	if world_seed is int and absi(world_seed) <= MAX_SEED:
 		settings.weather_seed = world_seed
+
+	var point_mode_value: Variant = file.get_value("look", "point_mode", "")
+	if point_mode_value is String and point_mode_value in POINT_MODES:
+		settings.point_mode = point_mode_value
 	return settings
 
 

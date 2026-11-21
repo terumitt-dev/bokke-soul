@@ -66,3 +66,9 @@ steps:
     image: barichello/godot-ci:4.7.2
     commands:
       - sh game/tests/run.sh player_test
+
+  # 点群の見せ方 (確かめた所の地図、点の生成、歩くと現れる、休むと広く現れる、設定) の動作テスト
+  - name: reveal-test
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - sh game/tests/run.sh reveal_test
