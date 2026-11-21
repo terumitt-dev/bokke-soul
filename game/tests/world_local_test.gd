@@ -60,7 +60,7 @@ func _initialize() -> void:
 	ring2.mesh = _quad_mesh([Vector3(8, 7, -2), Vector3(12, 7, -2), Vector3(12, 7, 2), Vector3(8, 7, 2)])
 	root.add_child(ring)
 	root.add_child(ring2)
-	var start: Vector3 = load("res://scripts/world_local.gd").pick_start([ring, ring2], Vector3.ZERO)
+	var start: Vector3 = WorldLoader.pick_start([ring, ring2], Vector3.ZERO)
 	check(absf(absf(start.x) - 8.0) < 0.01 and (start.y == 5.0 or start.y == 7.0), "中央が穴でも、地面のある頂点を開始地点にする")
 
 	quit(1 if failures.size() > 0 else 0)

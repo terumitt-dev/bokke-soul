@@ -11,5 +11,9 @@ config_version=5
 [application]
 
 config/name="bokke-soul"
-run/main_scene="res://scenes/main.tscn"
+run/main_scene="res://scenes/title.tscn"
 config/features=PackedStringArray("4.7")
+
+[gui]
+
+theme/custom="res://assets/theme.tres"

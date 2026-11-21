@@ -21,6 +21,8 @@ steps:
   - name: godot-import
     image: barichello/godot-ci:4.7.2
     commands:
+      # 書体を参照するテーマは、書体の取り込みより先に読まれると 1 回目にエラーを出す。2 回取り込むと確実に揃う
+      - godot --headless --path game --import --quit || true
       - godot --headless --path game --import --quit
 
   # 歩ける仮シーンの動作テスト (床・壁・落下復帰)
@@ -52,3 +54,9 @@ steps:
     image: barichello/godot-ci:4.7.2
     commands:
       - godot --headless --path game --script res://tests/weather_test.gd
+
+  # タイトル画面 (表示、メニュー、クレジット、出典) の動作テスト
+  - name: title-test
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - godot --headless --path game --script res://tests/title_test.gd

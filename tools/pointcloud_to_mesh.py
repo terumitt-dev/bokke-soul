@@ -161,6 +161,20 @@ def convert(
     return mesh
 
 
+def add_credit_arguments(parser: argparse.ArgumentParser) -> None:
+    """出典の指定 (--credit、--license-url) を足す。ゲームのタイトル画面とクレジットに表示される。"""
+    parser.add_argument("--credit", help="出典の文 (例: 「○○ (提供元) を加工して作成 / CC BY 4.0」)")
+    parser.add_argument("--license-url", help="ライセンスの URL")
+
+
+def apply_credit(mesh: trimesh.Trimesh, args: argparse.Namespace) -> None:
+    """--credit、--license-url で渡された出典を、メッシュの付属情報に入れる。"""
+    if args.credit:
+        mesh.metadata["credit"] = args.credit
+    if args.license_url:
+        mesh.metadata["license_url"] = args.license_url
+
+
 def write_outputs(mesh: trimesh.Trimesh, output: Path) -> None:
     """GLB と、元の座標に戻すための原点を書いた .json を書き出す。"""
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -186,11 +200,13 @@ def main() -> None:
     parser.add_argument(
         "--crop", type=float, nargs=4, metavar=("XMIN", "YMIN", "XMAX", "YMAX"), help="XY の切り出し範囲"
     )
+    add_credit_arguments(parser)
     args = parser.parse_args()
 
     points = load_points(args.input)
     print(f"読み込み: {len(points):,} 点")
     mesh = convert(points, args.voxel, args.min_points, args.min_component, tuple(args.crop) if args.crop else None)
+    apply_credit(mesh, args)
     write_outputs(mesh, args.output)
 
 

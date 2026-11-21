@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import trimesh
 
-from pointcloud_to_mesh import to_godot_axes, write_outputs
+from pointcloud_to_mesh import add_credit_arguments, apply_credit, to_godot_axes, write_outputs
 
 # これ以下の標高は「データなし」として扱う
 NODATA_BELOW = -9000.0
@@ -82,11 +82,14 @@ def main() -> None:
     parser.add_argument("input", type=Path, help="入力 (東 北 標高 のテキスト)")
     parser.add_argument("output", type=Path, help="出力 (.glb)")
     parser.add_argument("--stride", type=int, default=2, help="格子を何個おきに使うか (大きいほど軽くなる)")
+    add_credit_arguments(parser)
     args = parser.parse_args()
 
     xs, ys, z = load_dem(args.input)
     print(f"読み込み: {z.shape[1]} x {z.shape[0]} の格子 (欠け {int(np.isnan(z).sum()):,})")
-    write_outputs(convert(xs, ys, z, args.stride), args.output)
+    mesh = convert(xs, ys, z, args.stride)
+    apply_credit(mesh, args)
+    write_outputs(mesh, args.output)
 
 
 if __name__ == "__main__":
