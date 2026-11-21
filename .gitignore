@@ -12,3 +12,5 @@ game/export/
 # Python
 __pycache__/
 .venv/
+
+.pytest_cache/

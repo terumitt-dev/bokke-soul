@@ -1,0 +1,5 @@
+numpy
+scipy
+laspy[lazrs]
+trimesh
+pytest
