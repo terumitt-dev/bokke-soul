@@ -227,6 +227,15 @@ func _test_shoulder_collision() -> void:
 	await _frames(40)
 	check(absf(player.arm.position.x - player.SHOULDER_OFFSET) < 0.05, "壁から離れると、肩越しのずれが元に戻る")
 
+	# 視点を素早く壁の側へ回した直後でも、壁の中が映らない (壁へ向けて縮める時は、すぐに適用する)。
+	# カメラが壁と反対を向いている状態から、1 フレームで壁の側へ回す
+	await _reset(PI)
+	player.global_position = Vector3(7.0, 0.05, 0.0)
+	await _frames(40)  # 反対側を向いていて、ずれは元の大きさ
+	player.pivot.rotation.y = 0.0  # 右 (カメラの右) が、東の壁の側になる
+	await physics_frame
+	check(player.camera.global_position.x < 7.5, "視点を壁の側へ回した直後の 1 フレームでも、映る視点は壁の中に入らない (%.2f)" % player.camera.global_position.x)
+
 	# 左側 (西) に壁があっても、右へずれるだけなので、縮まない (西には壁がない部屋だが、体の左右で比べる)
 	await _reset(PI)  # カメラを反対向きにすると、「右」は西になる
 	player.global_position = Vector3(7.0, 0.05, 0.0)

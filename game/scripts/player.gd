@@ -104,8 +104,9 @@ func _physics_process(delta: float) -> void:
 	# 水平の速度は、1 つのベクトルとして目標へ近づける (向きを急に変えても、軌道が曲がらない)
 	var input := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	var direction := Basis(Vector3.UP, pivot.rotation.y) * Vector3(input.x, 0.0, input.y)
-	var running := Input.is_action_pressed("run") and direction.length() > 0.1
-	var target := Vector2(direction.x, direction.z) * (RUN_SPEED if Input.is_action_pressed("run") else WALK_SPEED)
+	var run_pressed := Input.is_action_pressed("run")
+	var running := run_pressed and direction.length() > 0.1  # 視野を広げるのは、実際に動いている間だけ
+	var target := Vector2(direction.x, direction.z) * (RUN_SPEED if run_pressed else WALK_SPEED)
 	var accel := ACCELERATION if on_floor else AIR_ACCELERATION
 	var horizontal := Vector2(velocity.x, velocity.z).move_toward(target, accel * delta)
 	velocity.x = horizontal.x
@@ -143,7 +144,12 @@ func _update_camera(delta: float, running: bool) -> void:
 	var offset := SHOULDER_OFFSET
 	if not hit.is_empty():
 		offset = clampf(origin.distance_to(hit.position) - SHOULDER_MARGIN, 0.0, SHOULDER_OFFSET)
-	arm.position.x = lerpf(arm.position.x, offset, clampf(SHOULDER_SPEED * delta, 0.0, 1.0))
+	# 壁へ向けて縮める時は、すぐに適用する (ゆっくりだと、視点を壁の側へ素早く回した直後に、壁の中が映る)。
+	# 壁から離れて元に戻す時だけ、なめらかに戻す
+	if offset < arm.position.x:
+		arm.position.x = offset
+	else:
+		arm.position.x = lerpf(arm.position.x, offset, clampf(SHOULDER_SPEED * delta, 0.0, 1.0))
 
 	# カメラが体に近すぎる時は、体を隠す。隠す距離と戻す距離をずらして、境目でちらつかないようにする
 	var distance := arm.get_hit_length()
