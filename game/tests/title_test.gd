@@ -102,6 +102,16 @@ func _test_title() -> void:
 	check("creativecommons.org/licenses/by/4.0" in title.credits_body.text and "静岡県" in title.credits_body.text, "クレジットに、出典とライセンスの URL を載せる")
 	check(not ("人工のサンプル" in title.credits_body.text), "出典があれば、サンプルとは書かない")
 
+	# 出典が長くても、はみ出さず折り返す
+	title.apply_credit({"credit": "短い出典", "license_url": ""})
+	for i in 3:
+		await process_frame
+	check(title.attribution.get_line_count() == 1, "短い出典は、1 行で出る")
+	title.apply_credit({"credit": "とても長い出典の文。" + "データの提供元と加工の内容を、省略せずにすべて書くと、このように長くなる。".repeat(6), "license_url": ""})
+	for i in 3:
+		await process_frame
+	check(title.attribution.get_line_count() > 1, "長い出典は、折り返して出る")
+
 	# 「はじめる」で、選んだ世界を渡して始まる
 	var received: Array[String] = []
 	title.start_requested.connect(func(path: String) -> void: received.append(path))

@@ -62,12 +62,23 @@ const KEYS := [
 
 
 const SUN_DEGREES_PER_HOUR := 15.0  # 6 時に水平線、12 時に真上、18 時に水平線
+const MOON_COLOR := Color(0.62, 0.72, 1.0)  # 青白い月明かり
 const SUN_FADE := 4.0  # 太陽の高さ (sin) がこの逆数に届くまでの間、光を徐々に強める
 
 
 # 太陽の高さ (-1〜1)。0 が水平線で、正なら地平線の上
 static func sun_height(hour: float) -> float:
 	return sin(deg_to_rad((hour - 6.0) * SUN_DEGREES_PER_HOUR))
+
+
+# 月の高さ (-1〜1)。月は太陽の反対側にあるので、太陽が沈むと昇る
+static func moon_height(hour: float) -> float:
+	return -sun_height(hour)
+
+
+# 月明かりの強さ (0〜1)。月が地平線の上にある間だけ出て、昇り始めは徐々に強くなる
+static func moon_level(hour: float) -> float:
+	return clampf(moon_height(hour) * SUN_FADE, 0.0, 1.0)
 
 
 # 太陽の光の強さ。時刻ごとの値に、太陽の高さで絞りをかける。
