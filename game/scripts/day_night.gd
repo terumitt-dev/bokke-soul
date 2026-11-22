@@ -19,6 +19,7 @@ var time: TimeOfDay
 var environment: Environment
 var sky_material: ProceduralSkyMaterial
 var grade := ColorGrade.look()  # 見た目の最終調整。既定はこのゲームの見た目 (ColorGrade.look)
+var restore_total_hours := NAN  # セーブから戻す時刻 (通しの時間)。_ready の前に渡す
 var forced_weather := ""  # 開発用。種類の id を入れると、その天気に固定する
 var weather: Dictionary  # いまの天気の値 (Weather.params_at)
 
@@ -32,6 +33,8 @@ func _ready() -> void:
 	if settings == null:
 		settings = GameSettings.load_from()
 	time = TimeOfDay.new(settings)
+	if not is_nan(restore_total_hours):
+		time.restore(restore_total_hours)
 	environment = (get_node(environment_path) as WorldEnvironment).environment
 	_sun = get_node(sun_path)
 	moon = DirectionalLight3D.new()

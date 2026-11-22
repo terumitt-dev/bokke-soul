@@ -51,6 +51,13 @@ func advance(seconds: float) -> void:
 			_total += seconds / (settings.day_length_minutes * 60.0) * HOURS
 
 
+# 保存した通しの時間に戻す。1 日を短くする方式だけ (実時間は、パソコンの時刻が正。止める方式は、動かさない)
+func restore(saved_total_hours: float) -> void:
+	if settings.time_mode == "accelerated" and is_finite(saved_total_hours):
+		_total = saved_total_hours
+		offset_hours = 0.0
+
+
 # 時刻を hours 時間ぶん飛ばす (開発用)
 func jump(hours: float) -> void:
 	offset_hours += hours
