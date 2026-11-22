@@ -189,9 +189,11 @@ func rest() -> void:
 func _rescan() -> void:
 	rescanning = true
 	prompt.visible = false
+	get_tree().call_group("point_world", "on_lost")  # 世界が崩れ始める
 	await _show_message("位置を見失いました。再スキャン中…", RESCAN_SECONDS)
 	global_position = spawn_position
 	velocity = Vector3.ZERO
+	get_tree().call_group("point_world", "on_rescan", spawn_position)  # 篝火から、波が広がって、再構成される
 	rescanning = false
 
 

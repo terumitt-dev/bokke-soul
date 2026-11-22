@@ -80,6 +80,11 @@ func coverage() -> float:
 	return float(count) / float(width() * height())
 
 
+# いまの地図のコピー。あとから書き込んでも、このコピーは変わらない (波の前の状態を残すのに使う)
+func snapshot() -> Image:
+	return _image.duplicate()
+
+
 # 書き込みがあれば、シェーダーが見るテクスチャへ反映する (毎フレームではなく、間引いて呼ぶ)
 func update_texture() -> bool:
 	if not _dirty:
