@@ -19,6 +19,8 @@ func _initialize() -> void:
 	await _test_integration()
 	await _test_environment_colors()
 	await _test_robustness()
+	await _test_rescan_effect()
+	await _test_rescan_flow()
 	quit(1 if failures.size() > 0 else 0)
 
 
@@ -78,9 +80,19 @@ func _test_settings() -> void:
 class Recorder:
 	extends Node
 	var calls: Array[Vector3] = []
+	var events: Array[String] = []  # 呼ばれた順 ("rest"、"lost"、"rescan")
+	var rescan_positions: Array[Vector3] = []
 
 	func on_rest(position: Vector3) -> void:
 		calls.append(position)
+		events.append("rest")
+
+	func on_lost() -> void:
+		events.append("lost")
+
+	func on_rescan(position: Vector3) -> void:
+		events.append("rescan")
+		rescan_positions.append(position)
 
 
 func _start_world(point_mode: String) -> Node:
@@ -286,5 +298,129 @@ func _test_robustness() -> void:
 		await physics_frame
 	var found := scene.get_node("World").find_children("*", "PointWorld", false, false)
 	check(found.size() == 1 and (found[0] as PointWorld).mode == PointWorld.Mode.MESH_AND_POINTS, "不正な point_mode (@export 経由) も、既定の面と点にする")
+	scene.queue_free()
+	await process_frame
+
+
+func _param(point_world: PointWorld, name: String) -> Variant:
+	return point_world._point_material.get_shader_parameter(name)
+
+
+# 時間を待つ。ヘッドレスは、描画のフレームが 1 秒に約 140 回回るので、フレーム数では時間を測れない
+func _seconds(seconds: float) -> void:
+	await create_timer(seconds).timeout
+
+
+# 再スキャンの演出: 世界が崩れ、波が広がって再構成される。篝火で休んだ時も、同じ波が出る (崩れはなし)
+func _test_rescan_effect() -> void:
+	var world := _big_world()
+	var player := Node3D.new()
+	root.add_child(world)
+	root.add_child(player)
+	player.global_position = Vector3(100, 0, 100)
+	var point_world := PointWorld.new()
+	root.add_child(point_world)
+	point_world.setup(world, player)
+	await _seconds(0.1)
+
+	check(point_world.disturbance == 0.0 and not point_world.pulse_active, "最初は、崩れていないし、波も出ていない")
+	check(_param(point_world, "disturbance") == 0.0 and _param(point_world, "pulse_enabled") == 0.0, "シェーダーにも、崩れも波もないと伝わる")
+
+	# 崩れる: 約 0.8 秒で最大になる
+	point_world.on_lost()
+	await _seconds(0.33)
+	var halfway: float = point_world.disturbance
+	check(halfway > 0.2 and halfway < 0.8, "落ちると、世界が少しずつ崩れていく (途中 %.2f)" % halfway)
+	await _seconds(0.7)
+	check(point_world.disturbance > 0.99, "約 0.8 秒で、崩れが最大になる (%.2f)" % point_world.disturbance)
+	check(is_equal_approx(_param(point_world, "disturbance"), point_world.disturbance), "崩れ具合が、シェーダーへ伝わる")
+	await _seconds(1.0)
+	check(point_world.disturbance > 0.99, "再構成が始まるまで、崩れたまま保たれる")
+
+	# 画面全体のノイズ (世界の点が視界に入らなくても、「位置を見失った」と伝わるように)
+	var glitch_rect: ColorRect = point_world.glitch_rect
+	check(point_world.glitch > 0.99 and glitch_rect.visible, "崩れている間は、画面全体にノイズがかかる (%.2f)" % point_world.glitch)
+	check(is_equal_approx((glitch_rect.material as ShaderMaterial).get_shader_parameter("intensity"), point_world.glitch), "ノイズの強さが、シェーダーへ伝わる")
+	check(glitch_rect.mouse_filter == Control.MOUSE_FILTER_IGNORE, "ノイズの層は、マウスの操作を邪魔しない")
+	check((glitch_rect.get_parent() as CanvasLayer).layer < 1, "ノイズの層は、メッセージ (HUD) より下にある (文字が読める)")
+
+	# 再構成: 篝火の位置から、波が広がる。波が通るまで、新しく現れる所は見えない
+	var center := Vector3(30, 0, 160)
+	var before: Image = point_world.reveal.snapshot()
+	var target := center + Vector3(PointWorld.REST_RADIUS - 10.0, 0, 0)  # 中心から 30m
+	check(point_world.reveal.sample(target) == 0.0, "再構成の前は、そこをまだ確かめていない")
+	point_world.on_rescan(center)
+	check(point_world.pulse_active and point_world.pulse_radius < 1.0, "再構成が始まると、波が出る (半径はほぼ 0)")
+	check(point_world.prev_image != null and point_world.prev_image.get_pixelv(point_world.reveal.pixel_of(target)).r == 0.0, "波の前の状態を、別に残す (新しく現れる所は、波が通るまで見えない)")
+	check(point_world.reveal.sample(target) > 0.3, "確かめた所の地図には、最初から最終の範囲が書かれる (波は、見せ方だけを動かす)")
+	check(before.get_pixelv(point_world.reveal.pixel_of(target)).r == 0.0, "波の前のコピーは、あとの書き込みの影響を受けない")
+
+	var previous_radius := 0.0
+	var monotonic := true
+	var max_radius := 0.0
+	var started := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - started < int((PointWorld.PULSE_SECONDS + 0.25) * 1000.0):
+		await process_frame
+		monotonic = monotonic and point_world.pulse_radius >= previous_radius - 0.0001
+		previous_radius = point_world.pulse_radius
+		max_radius = maxf(max_radius, point_world.pulse_radius)
+	check(monotonic, "波は、広がり続ける (縮まない)")
+	check(max_radius > PointWorld.REST_RADIUS, "波は、書き込んだ範囲を超えて広がる (%.1f m)" % max_radius)
+	check(not point_world.pulse_active, "波は、決まった時間で終わる")
+	check(_param(point_world, "ring_strength") == 0.0, "波が終わると、波の縁の光も消える (シェーダーにも伝わる)")
+	check(_param(point_world, "pulse_enabled") == 1.0, "遠くの崩れが戻るまでは、波の範囲を保つ (内側が、崩れた状態へ戻らない)")
+
+	# 画面全体のノイズは、波が広がる間に消える (遠くの崩れが戻るのを待たない)
+	check(point_world.glitch == 0.0 and not glitch_rect.visible, "波が広がる間に、画面のノイズは消える (描画の負荷もなくなる)")
+
+	# 波が終わってから、遠くの崩れが、ゆっくり戻る
+	check(point_world.disturbance > 0.0 and point_world.disturbance < 1.0, "波が終わったあとは、崩れが少しずつ戻っていく (%.2f)" % point_world.disturbance)
+	await _seconds(PointWorld.RECOVER_SECONDS + 0.4)
+	check(point_world.disturbance == 0.0, "やがて、崩れが完全に戻る")
+	check(_param(point_world, "pulse_enabled") == 0.0, "崩れが戻りきると、波の範囲も外れる")
+
+	# 篝火で休んだ時も、波が出る。崩れは起きない
+	var rest_center := Vector3(160, 0, 30)
+	point_world.on_rest(rest_center)
+	check(point_world.pulse_active and point_world.disturbance == 0.0 and not glitch_rect.visible, "篝火で休んだ時も波が出る (世界は崩れず、画面のノイズもない)")
+	check(point_world.reveal.sample(rest_center) > 0.9, "休んだ篝火の周りは、確かめた所になる")
+	await _seconds(PointWorld.PULSE_SECONDS + 0.3)
+	check(not point_world.pulse_active and point_world.disturbance == 0.0, "休んだ時の波も、終わる (崩れは起きないまま)")
+
+	point_world.queue_free()
+	world.queue_free()
+	player.queue_free()
+	await process_frame
+
+
+# Player が落ちて、復帰するまでの流れ
+func _test_rescan_flow() -> void:
+	var scene := _start_world("mesh_and_points")
+	for i in 60:
+		await physics_frame
+	var player: CharacterBody3D = scene.get_node("Player")
+	var recorder := Recorder.new()
+	recorder.add_to_group("point_world")
+	scene.add_child(recorder)
+	var point_world: PointWorld = scene.get_node("World").find_children("*", "PointWorld", false, false)[0]
+	var spawn: Vector3 = player.spawn_position
+
+	player.global_position = Vector3(0, -30, 0)  # 世界の下へ落とす
+	await _seconds(0.4)
+	check(recorder.events == ["lost"] and player.rescanning, "落ちると、まず点の表現へ「位置を見失った」と知らせる")
+	check(point_world.disturbance > 0.2, "落ちている間に、世界が崩れ始める (%.2f)" % point_world.disturbance)
+
+	# 復帰するまで (RESCAN_SECONDS)
+	await _seconds(player.RESCAN_SECONDS)
+	var horizontal := Vector2(player.global_position.x - spawn.x, player.global_position.z - spawn.z).length()
+	check(not player.rescanning and horizontal < 0.5, "復帰した (篝火の位置、水平の距離 %.2f)" % horizontal)
+	check(recorder.events == ["lost", "rescan"], "復帰したあとに、再構成を知らせる (順番: 位置を見失う → 再構成)")
+	check(recorder.rescan_positions.size() == 1 and recorder.rescan_positions[0].is_equal_approx(spawn), "再構成は、復帰した篝火の位置から始まる")
+	check(point_world.pulse_active, "復帰した直後に、波が出ている")
+
+	# 全部おさまる (波 + 崩れが戻る時間)
+	await _seconds(PointWorld.PULSE_SECONDS + PointWorld.RECOVER_SECONDS + 0.8)
+	check(point_world.disturbance == 0.0 and not point_world.pulse_active, "しばらくすると、崩れも波もおさまる")
+	check(player.is_on_floor(), "再スキャンのあとも、地面に立てる")
 	scene.queue_free()
 	await process_frame
