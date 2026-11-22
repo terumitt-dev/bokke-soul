@@ -9,6 +9,7 @@ extends Node3D
 const START_HEIGHT := 2.0
 const START_BONFIRE_DISTANCE := 2.0  # 最初の篝火を、始めた場所の、どれだけ前に置くか (m)
 const NOTICE_SECONDS := 3.0  # 保存に失敗した知らせを出しておく時間 (休んだ知らせより長い)
+const CLOSE_HOLD_SECONDS := 8.0  # 閉じる時に保存に失敗した時、終了を保留しておく時間
 
 @export var world_path := ""
 # 点の表現の方式 (mesh_and_points / points_only / off)。空なら、設定ファイルから読む
@@ -25,6 +26,7 @@ var _save_active := false
 # セーブから読んだ、確かめた所の地図 (PNG)。点の表現が無効な間も、保存に引き継ぐ。
 # 設定を一時的に切り替えただけで、それまで確かめた所が失われないように
 var _loaded_reveal := ""
+var _close_held := false  # 保存に失敗して、終了を保留している間
 
 
 func _ready() -> void:
@@ -58,7 +60,29 @@ func _ready() -> void:
 func _notification(what: int) -> void:
 	# ゲームを閉じる時にも保存する (確かめた所を、休まずに閉じても残す)
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
-		save_now()
+		_on_close_requested()
+	elif what == NOTIFICATION_EXIT_TREE:
+		get_tree().auto_accept_quit = true  # 保留のまま、終了の設定を残さない
+
+
+# 閉じる操作。保存して、そのまま終了する。保存に失敗したら、終了を保留して、知らせる
+# (失敗の知らせを読む前に閉じると、最後の保存以降の探索が、静かに失われるため)。
+# もう一度閉じれば、保存できなくても、終了する (閉じられなくなることはない)。
+# 閉じる操作の通知は、終了の処理より先に届くので、ここで終了の自動受け付けを切れば、保留できる
+func _on_close_requested() -> void:
+	var saved := save_now()
+	var tree := get_tree()
+	if _save_active and not saved and not _close_held:
+		_close_held = true
+		tree.auto_accept_quit = false
+		player.notice("セーブに失敗しました。もう一度閉じると、保存せずに終了します", CLOSE_HOLD_SECONDS)
+		await tree.create_timer(CLOSE_HOLD_SECONDS).timeout
+		if _close_held:  # 保留したまま放っておいた。保留を解く (閉じる操作が、効かなくなったままにならないように)
+			_close_held = false
+			tree.auto_accept_quit = true
+	else:
+		_close_held = false
+		tree.auto_accept_quit = true
 
 
 # 最初の基準点として、始めた場所のすぐ前に、篝火を 1 つ置く。ここで休める (休むとセーブされ、落ちたらここへ戻る)。

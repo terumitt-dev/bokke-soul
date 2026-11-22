@@ -48,6 +48,7 @@ func _initialize() -> void:
 	_test_time_restore()
 	await _test_game()
 	await _test_failure_notice()
+	await _test_close_with_failed_save()
 	await _test_points_off_keeps_map()
 	await _test_start_bonfire()
 	await _test_title()
@@ -361,6 +362,64 @@ func _test_failure_notice() -> void:
 	player.rest()
 	check(player.message.text == "基準点を確定しました", "保存に成功した時は、「基準点を確定しました」が出る")
 	scene.queue_free()
+	await process_frame
+	SaveGame.delete(SAMPLE)
+
+
+# 閉じる時に保存に失敗したら、そのまま閉じず、知らせて保留する。もう一度閉じれば、閉じられる
+func _test_close_with_failed_save() -> void:
+	SaveGame.delete(SAMPLE)
+	var scene := _start_world()
+	for i in 40:
+		await physics_frame
+	var world: Node = scene.get_node("World")
+	var player: CharacterBody3D = scene.get_node("Player")
+	var tree := scene.get_tree()
+	check(tree.auto_accept_quit, "(前提) 普段は、閉じる操作で、そのまま終了する")
+
+	# 保存に成功する時は、そのまま閉じる
+	world._notification(Node.NOTIFICATION_WM_CLOSE_REQUEST)
+	check(tree.auto_accept_quit and SaveGame.exists(SAMPLE), "保存に成功すれば、そのまま閉じられる (終了を保留しない)")
+
+	# 保存に失敗する時は、閉じるのを保留して、知らせる
+	SaveGame.fail_writes = true
+	world._notification(Node.NOTIFICATION_WM_CLOSE_REQUEST)
+	check(not tree.auto_accept_quit, "保存に失敗したら、閉じるのを保留する (知らせを読む前に、終了しない)")
+	check(player.message.visible and "もう一度" in player.message.text, "保留の理由と、もう一度閉じると保存せずに終了することを、知らせる (%s)" % player.message.text)
+
+	# もう一度閉じる: 保存できなくても、望むなら、閉じられる
+	world._notification(Node.NOTIFICATION_WM_CLOSE_REQUEST)
+	check(tree.auto_accept_quit, "もう一度閉じれば、保存できなくても、終了できる (閉じられなくならない)")
+
+	# 保留が解けたあと: また保存を試みる (今度は成功する)
+	SaveGame.fail_writes = false
+	world._notification(Node.NOTIFICATION_WM_CLOSE_REQUEST)
+	check(tree.auto_accept_quit, "保存できる状態に戻れば、また普通に閉じられる")
+
+	# 保留したまま放っておいても、保留が解ける (終了できないまま、になる)
+	SaveGame.fail_writes = true
+	world._notification(Node.NOTIFICATION_WM_CLOSE_REQUEST)
+	check(not tree.auto_accept_quit, "(前提) もう一度、保留した")
+	await _seconds(world.CLOSE_HOLD_SECONDS + 0.4)
+	check(tree.auto_accept_quit, "保留は、しばらくすると解ける (閉じる操作が、効かなくなったままにならない)")
+	SaveGame.fail_writes = false
+
+	# 画面を閉じるように、この場面が消えても、終了の設定が、保留のまま残らない
+	SaveGame.fail_writes = true
+	world._notification(Node.NOTIFICATION_WM_CLOSE_REQUEST)
+	SaveGame.fail_writes = false
+	scene.queue_free()
+	await process_frame
+	await process_frame
+	check(tree.auto_accept_quit, "場面が消えても、終了の設定が、保留のまま残らない")
+
+	# セーブを切っている時は、保存しないので、そのまま閉じる
+	var off := _start_world(false)
+	for i in 20:
+		await physics_frame
+	off.get_node("World")._notification(Node.NOTIFICATION_WM_CLOSE_REQUEST)
+	check(tree.auto_accept_quit, "セーブを切っていれば、そのまま閉じられる")
+	off.queue_free()
 	await process_frame
 	SaveGame.delete(SAMPLE)
 
