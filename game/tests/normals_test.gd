@@ -72,6 +72,32 @@ func _write_glb_without_normals(path: String, slope_x: float) -> void:
 	root_node.free()
 
 
+# 約 18 万の三角形の格子 (法線あり / なし)
+func _big_grid(cells: int, with_normals: bool) -> MeshInstance3D:
+	var vertices := PackedVector3Array()
+	var normals := PackedVector3Array()
+	for z in cells + 1:
+		for x in cells + 1:
+			vertices.append(Vector3(x, sin(x * 0.1) * 3.0, z))
+			normals.append(Vector3.UP)
+	var indices := PackedInt32Array()
+	for z in cells:
+		for x in cells:
+			var i := z * (cells + 1) + x
+			indices.append_array([i, i + 1, i + cells + 1, i + 1, i + cells + 2, i + cells + 1])
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_INDEX] = indices
+	if with_normals:
+		arrays[Mesh.ARRAY_NORMAL] = normals
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var instance := MeshInstance3D.new()
+	instance.mesh = mesh
+	return instance
+
+
 func _test_sample_world() -> void:
 	var loaded := WorldLoader.load_world(WorldLoader.SAMPLE_PATH)
 	var arrays := _surface_arrays(loaded.node)
@@ -120,6 +146,18 @@ func _test_missing_normals() -> void:
 	flat.node.free()
 
 	# 読み込んだ世界は、実際に光が当たる形で使える (法線がある素材として、メッシュが有効)
+	# 法線のないメッシュは、作り直される。複数のサーフェスがあれば、法線のあるものは、そのまま使う
+	var mixed_path := TMP + "/mixed.glb"
+	_write_glb_without_normals(mixed_path, 0.25)
+	var mixed := WorldLoader.load_world(mixed_path)
+	var mixed_instance := mixed.node.find_children("*", "MeshInstance3D", true, false)[0] as MeshInstance3D
+	var first_normals: Variant = mixed_instance.mesh.surface_get_arrays(0)[Mesh.ARRAY_NORMAL]
+	check(first_normals != null and (first_normals as PackedVector3Array).size() > 0, "法線のなかったメッシュは、法線つきに作り直される")
+	var rebuilt := mixed_instance.mesh
+	WorldLoader._ensure_normals(mixed.node)
+	check(mixed_instance.mesh == rebuilt, "作り直したあとは、もう一度呼んでも、同じメッシュのまま")
+	mixed.node.free()
+
 	var reloaded := WorldLoader.load_world(path)
 	var mesh_instance := reloaded.node.find_children("*", "MeshInstance3D", true, false)[0] as MeshInstance3D
 	check(mesh_instance.mesh.get_surface_count() == 1 and mesh_instance.material_override is StandardMaterial3D, "法線を作ったあとも、メッシュは 1 つで、砂の素材が付く")
@@ -133,6 +171,23 @@ func _test_existing_normals_are_kept() -> void:
 	var again := WorldLoader.load_world(WorldLoader.SAMPLE_PATH)
 	var again_arrays := _surface_arrays(again.node)
 	check((arrays[Mesh.ARRAY_NORMAL] as PackedVector3Array) == (again_arrays[Mesh.ARRAY_NORMAL] as PackedVector3Array), "法線のある GLB は、毎回、同じ法線で読み込まれる (作り直さない)")
+	# 法線のあるメッシュは、確かめるだけで済ませる。法線を作る処理 (重い) より、ずっと速いこと。
+	# 作り直してから捨てると、無駄な作成の時間とメモリがかかる。機械の速さに左右されないよう、比で確かめる
+	var with_normals := Node3D.new()
+	with_normals.add_child(_big_grid(300, true))
+	var without_normals := Node3D.new()
+	without_normals.add_child(_big_grid(300, false))
+	var t0 := Time.get_ticks_usec()
+	WorldLoader._ensure_normals(with_normals)
+	var t1 := Time.get_ticks_usec()
+	WorldLoader._ensure_normals(without_normals)
+	var t2 := Time.get_ticks_usec()
+	var cheap := maxf(t1 - t0, 1.0)
+	var ratio := float(t2 - t1) / cheap
+	check(ratio > 100.0, "法線のあるメッシュは、確かめるだけで済む (法線を作る処理の 1/%.0f の時間。%.2f ms と %.1f ms)" % [ratio, cheap / 1000.0, (t2 - t1) / 1000.0])
+	with_normals.free()
+	without_normals.free()
+
 	var started := Time.get_ticks_usec()
 	var third := WorldLoader.load_world(WorldLoader.SAMPLE_PATH)
 	var elapsed := (Time.get_ticks_usec() - started) / 1000.0

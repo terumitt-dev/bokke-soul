@@ -89,21 +89,33 @@ static func pick_start(meshes: Array, target: Vector3) -> Vector3:
 static func _ensure_normals(world: Node) -> void:
 	for instance: MeshInstance3D in world.find_children("*", "MeshInstance3D", true, false):
 		var mesh := instance.mesh as ArrayMesh
-		if mesh == null:
-			continue
+		if mesh == null or not _lacks_normals(mesh):
+			continue  # 法線がそろっているメッシュは、確かめるだけ。作り直さない (無駄な作成の時間とメモリを避ける)
 		var rebuilt := ArrayMesh.new()
-		var changed := false
 		for surface in mesh.get_surface_count():
 			var arrays := mesh.surface_get_arrays(surface)
 			var primitive := mesh.surface_get_primitive_type(surface)
-			var normals: Variant = arrays[Mesh.ARRAY_NORMAL]
-			if primitive == Mesh.PRIMITIVE_TRIANGLES and (normals == null or (normals as PackedVector3Array).is_empty()):
+			if _surface_lacks_normals(mesh, surface):
 				arrays[Mesh.ARRAY_NORMAL] = _smooth_normals(arrays[Mesh.ARRAY_VERTEX], arrays[Mesh.ARRAY_INDEX])
-				changed = true
 			rebuilt.add_surface_from_arrays(primitive, arrays)
 			rebuilt.surface_set_material(surface, mesh.surface_get_material(surface))
-		if changed:
-			instance.mesh = rebuilt
+		instance.mesh = rebuilt
+
+
+# 法線のないサーフェスがあるか。サーフェスの形式の情報だけを見る (頂点の配列を取り出さないので、速い)
+static func _lacks_normals(mesh: ArrayMesh) -> bool:
+	for surface in mesh.get_surface_count():
+		if _surface_lacks_normals(mesh, surface):
+			return true
+	return false
+
+
+# 三角形のサーフェスで、法線を持たないか (点や線のサーフェスには、法線は要らない)
+static func _surface_lacks_normals(mesh: ArrayMesh, surface: int) -> bool:
+	return (
+		mesh.surface_get_primitive_type(surface) == Mesh.PRIMITIVE_TRIANGLES
+		and (mesh.surface_get_format(surface) & Mesh.ARRAY_FORMAT_NORMAL) == 0
+	)
 
 
 # 頂点ごとの法線。頂点につながる三角形の法線を、面積に比例した重みで平均する (滑らかな陰影)
