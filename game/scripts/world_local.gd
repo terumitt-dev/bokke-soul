@@ -8,7 +8,7 @@ extends Node3D
 
 const START_HEIGHT := 2.0
 const START_BONFIRE_DISTANCE := 2.0  # 最初の篝火を、始めた場所の、どれだけ前に置くか (m)
-const NOTICE_SECONDS := 3.0
+const NOTICE_SECONDS := 3.0  # 保存に失敗した知らせを出しておく時間 (休んだ知らせより長い)
 
 @export var world_path := ""
 # 点の表現の方式 (mesh_and_points / points_only / off)。空なら、設定ファイルから読む
@@ -22,7 +22,9 @@ const NOTICE_SECONDS := 3.0
 var _points: PointWorld
 var _save_world := ""  # セーブの対象の世界の場所
 var _save_active := false
-var _notice_id := 0
+# セーブから読んだ、確かめた所の地図 (PNG)。点の表現が無効な間も、保存に引き継ぐ。
+# 設定を一時的に切り替えただけで、それまで確かめた所が失われないように
+var _loaded_reveal := ""
 
 
 func _ready() -> void:
@@ -99,6 +101,9 @@ func _setup_save() -> void:
 
 # 読んだセーブを、ゲームへ反映する。項目ごとに検証して、不正なものは、黙って無視する
 func _apply_save(state: Dictionary) -> void:
+	var kept: Variant = state.get("reveal_png")
+	if kept is String:
+		_loaded_reveal = kept
 	var spawn: Variant = SaveGame.decode_vector(state.get("spawn"))
 	if spawn != null:
 		player.global_position = spawn
@@ -125,21 +130,17 @@ func save_now() -> bool:
 		state["time_total_hours"] = day_night.time.total_hours
 	if _points != null:
 		state["reveal_png"] = SaveGame.encode_bytes(_points.reveal.to_png())
+	elif not _loaded_reveal.is_empty():
+		state["reveal_png"] = _loaded_reveal  # 点の表現を切っている間も、保存済みの地図は残す
 	var saved := SaveGame.write(_save_world, state)
 	if not saved:
 		_notify("セーブに失敗しました")
 	return saved
 
 
-# 画面に、しばらくメッセージを出す
+# 画面に、しばらくメッセージを出す。休んだ知らせに上書きされないよう、Player の通知を使う
 func _notify(text: String) -> void:
-	_notice_id += 1
-	var id := _notice_id
-	message.text = text
-	message.visible = true
-	await get_tree().create_timer(NOTICE_SECONDS).timeout
-	if id == _notice_id:
-		message.visible = false
+	player.notice(text, NOTICE_SECONDS)
 
 
 func _fail(text: String) -> void:

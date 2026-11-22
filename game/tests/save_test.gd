@@ -47,6 +47,8 @@ func _initialize() -> void:
 	_test_reveal_png()
 	_test_time_restore()
 	await _test_game()
+	await _test_failure_notice()
+	await _test_points_off_keeps_map()
 	await _test_start_bonfire()
 	await _test_title()
 	_clean()
@@ -330,6 +332,90 @@ func _test_game() -> void:
 	check(FileAccess.get_file_as_string(path) == future, "新しいバージョンのセーブは、休んでも、閉じても、上書きされない")
 	check(p4.has_rested and not newer.get_node("World").find_children("*", "PointWorld", false, false).is_empty(), "新しいバージョンのセーブでも、ゲームは普通に遊べる")
 	newer.queue_free()
+	await process_frame
+	SaveGame.delete(SAMPLE)
+
+
+# 休んで保存に失敗したら、そのことが画面に出て、「基準点を確定しました」に上書きされず、読める時間、残る
+func _test_failure_notice() -> void:
+	SaveGame.delete(SAMPLE)
+	var scene := _start_world()
+	for i in 40:
+		await physics_frame
+	var player: CharacterBody3D = scene.get_node("Player")
+	var fire: Node3D = load("res://scenes/bonfire.tscn").instantiate()
+	scene.add_child(fire)
+	fire.global_position = player.global_position + Vector3(1.0, 0.0, 0.0)
+	for i in 5:
+		await process_frame
+	SaveGame.fail_writes = true
+	player.rest()
+	SaveGame.fail_writes = false
+	check(player.message.visible and player.message.text == "セーブに失敗しました", "保存に失敗したら、その旨が画面に出る (「基準点を確定しました」に上書きされない: %s)" % player.message.text)
+	await _seconds(player.NOTICE_SECONDS + 0.3)  # 休んだ知らせ (1.5 秒) が消える時間を過ぎても、失敗の知らせは残る
+	check(player.message.visible and player.message.text == "セーブに失敗しました", "休んだ知らせが消える時間を過ぎても、保存の失敗は、読める時間、残る")
+	await _seconds(2.0)
+	check(not player.message.visible, "保存の失敗の知らせも、しばらくすると消える")
+
+	# 成功した時は、普通に「基準点を確定しました」が出る
+	player.rest()
+	check(player.message.text == "基準点を確定しました", "保存に成功した時は、「基準点を確定しました」が出る")
+	scene.queue_free()
+	await process_frame
+	SaveGame.delete(SAMPLE)
+
+
+# 点の表現を切って遊んでも、保存済みの確かめた所の地図を失わない (戻した時に、また使える)
+func _test_points_off_keeps_map() -> void:
+	SaveGame.delete(SAMPLE)
+	var first := _start_world()
+	for i in 40:
+		await physics_frame
+	var player: CharacterBody3D = first.get_node("Player")
+	var points: PointWorld = first.get_node("World").find_children("*", "PointWorld", false, false)[0]
+	var painted := player.global_position + Vector3(4.0, 0.0, 4.0)
+	points.reveal_at(painted, 3.0)
+	check(first.get_node("World").save_now(), "(前提) 地図つきで保存できる")
+	var saved_png: String = SaveGame.read(SAMPLE).state.reveal_png
+	first.queue_free()
+	await process_frame
+
+	# 点の表現を切って始める。休んでも、閉じても、地図は保存に引き継がれる
+	var off := _start_world()
+	off.get_node("World").point_mode = "off"
+	off.queue_free()
+	await process_frame
+	var off_scene: Node = load("res://scenes/world_local.tscn").instantiate()
+	var settings := GameSettings.new()
+	settings.weather_enabled = false
+	off_scene.get_node("DayNight").settings = settings
+	off_scene.get_node("World").world_path = SAMPLE
+	off_scene.get_node("World").point_mode = "off"
+	root.add_child(off_scene)
+	for i in 40:
+		await physics_frame
+	var p2: CharacterBody3D = off_scene.get_node("Player")
+	check(off_scene.get_node("World").find_children("*", "PointWorld", false, false).is_empty(), "(前提) 点の表現を切って始まった")
+	var fire: Node3D = load("res://scenes/bonfire.tscn").instantiate()
+	off_scene.add_child(fire)
+	fire.global_position = p2.global_position + Vector3(1.0, 0.0, 0.0)
+	for i in 5:
+		await process_frame
+	p2.rest()
+	off_scene.get_node("World")._notification(Node.NOTIFICATION_WM_CLOSE_REQUEST)
+	var after: Dictionary = SaveGame.read(SAMPLE).state
+	check(after.get("reveal_png") == saved_png, "点の表現を切っていても、休んだ・閉じた時に、保存済みの地図が、セーブに引き継がれる (失われない)")
+	check(after.has("spawn"), "(ほかの項目は、普通に保存される)")
+	off_scene.queue_free()
+	await process_frame
+
+	# 点の表現を戻すと、保存した地図が、そのまま使える
+	var back := _start_world()
+	for i in 40:
+		await physics_frame
+	var back_points: PointWorld = back.get_node("World").find_children("*", "PointWorld", false, false)[0]
+	check(back_points.reveal.sample(painted) > 0.9, "点の表現を戻すと、前に確かめた所が、残っている")
+	back.queue_free()
 	await process_frame
 	SaveGame.delete(SAMPLE)
 
