@@ -27,7 +27,11 @@ const RESCAN_SECONDS := 1.5
 const REST_DISTANCE := 2.5
 const NOTICE_SECONDS := 1.5
 
+# 篝火で休んだ時 (position は篝火の位置)。セーブなどが聞く
+signal rested(position: Vector3)
+
 var spawn_position: Vector3
+var has_rested := false  # 篝火で休んだことがあるか (休んだことがなければ、復帰地点は、最初の地点)
 var rescanning := false
 var nearby_bonfire: Node3D
 var message_id := 0
@@ -181,6 +185,8 @@ func rest() -> void:
 	if rescanning or nearby_bonfire == null:
 		return
 	spawn_position = nearby_bonfire.rest_position()
+	has_rested = true
+	rested.emit(nearby_bonfire.global_position)
 	get_tree().call_group("point_world", "on_rest", nearby_bonfire.global_position)
 	_show_message("基準点を確定しました", NOTICE_SECONDS)
 

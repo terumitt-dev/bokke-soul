@@ -84,6 +84,11 @@ layout_mode = 2
 layout_mode = 2
 text = "はじめる"
 
+[node name="NewGameButton" type="Button" parent="UI/Menu"]
+visible = false
+layout_mode = 2
+text = "はじめから"
+
 [node name="CreditsButton" type="Button" parent="UI/Menu"]
 layout_mode = 2
 text = "クレジット"

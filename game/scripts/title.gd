@@ -7,6 +7,7 @@ const GAME_SCENE := "res://scenes/world_local.tscn"
 const EYE_HEIGHT := 3.0
 const TURN_SPEED := 0.04  # ラジアン/秒。約 2 分半で一周
 const LOOK_DOWN := -0.06
+const NEW_GAME_CONFIRM_SECONDS := 4.0  # 「はじめから」の確認を待つ時間 (秒)
 
 signal start_requested(world_path: String)
 
@@ -16,11 +17,14 @@ signal start_requested(world_path: String)
 var auto_change_scene := true
 var resolved_path := ""
 var credit := {"credit": "", "license_url": ""}
+var has_save := false
+var _new_game_confirming := false
 
 @onready var camera: Camera3D = $Camera3D
 @onready var world_root: Node3D = $World
 @onready var menu: VBoxContainer = $UI/Menu
 @onready var start_button: Button = $UI/Menu/StartButton
+@onready var new_game_button: Button = $UI/Menu/NewGameButton
 @onready var credits_button: Button = $UI/Menu/CreditsButton
 @onready var quit_button: Button = $UI/Menu/QuitButton
 @onready var attribution: Label = $UI/Attribution
@@ -34,8 +38,10 @@ func _ready() -> void:
 	resolved_path = WorldLoader.resolve_path(world_path)
 	_load_background()
 	apply_credit(WorldLoader.credit_for(resolved_path))
+	_refresh_save()
 
 	start_button.pressed.connect(_start)
+	new_game_button.pressed.connect(_new_game)
 	credits_button.pressed.connect(_show_credits)
 	back_button.pressed.connect(_hide_credits)
 	quit_button.pressed.connect(func() -> void: get_tree().quit())
@@ -97,6 +103,31 @@ func apply_credit(info: Dictionary) -> void:
 	body.append("ゲームエンジン")
 	body.append("  Godot Engine (MIT License)")
 	credits_body.text = "\n".join(body)
+
+
+# セーブがあれば、「つづきから」と「はじめから」を出す。なければ「はじめる」だけ
+func _refresh_save() -> void:
+	has_save = SaveGame.read(resolved_path).status == "ok"
+	start_button.text = "つづきから" if has_save else "はじめる"
+	new_game_button.visible = has_save
+	_new_game_confirming = false
+	new_game_button.text = "はじめから"
+
+
+# 「はじめから」: セーブを消すので、うっかり押しても消えないよう、もう一度押して確定する
+func _new_game() -> void:
+	if not _new_game_confirming:
+		_new_game_confirming = true
+		new_game_button.text = "セーブを消します。もう一度押すと、はじめから"
+		await get_tree().create_timer(NEW_GAME_CONFIRM_SECONDS).timeout
+		if _new_game_confirming:  # 確定されなかった。元に戻す
+			_new_game_confirming = false
+			new_game_button.text = "はじめから"
+		return
+	_new_game_confirming = false
+	SaveGame.delete(resolved_path)
+	has_save = false
+	_start()
 
 
 func _start() -> void:
