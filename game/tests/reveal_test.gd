@@ -21,6 +21,7 @@ func _initialize() -> void:
 	await _test_robustness()
 	await _test_rescan_effect()
 	await _test_rescan_flow()
+	await _test_rescan_twice_and_overlap()
 	quit(1 if failures.size() > 0 else 0)
 
 
@@ -423,4 +424,64 @@ func _test_rescan_flow() -> void:
 	check(point_world.disturbance == 0.0 and not point_world.pulse_active, "しばらくすると、崩れも波もおさまる")
 	check(player.is_on_floor(), "再スキャンのあとも、地面に立てる")
 	scene.queue_free()
+	await process_frame
+
+
+# 2 周目の落下と、波の最中の操作。1 回目だけを確かめるテストでは、見つからない不具合を押さえる
+func _test_rescan_twice_and_overlap() -> void:
+	var world := _big_world()
+	var player := Node3D.new()
+	root.add_child(world)
+	root.add_child(player)
+	player.global_position = Vector3(100, 0, 100)
+	var point_world := PointWorld.new()
+	root.add_child(point_world)
+	point_world.setup(world, player)
+	await _seconds(0.1)
+
+	# 1 周目: 落ちて、篝火 A から再構成して、すっかりおさまる
+	var fire_a := Vector3(40, 0, 40)
+	point_world.on_lost()
+	await _seconds(0.9)
+	point_world.on_rescan(fire_a)
+	await _seconds(PointWorld.PULSE_SECONDS + PointWorld.RECOVER_SECONDS + 0.5)
+	check(point_world.disturbance == 0.0 and not point_world.pulse_active, "1 周目がおさまった")
+	check(point_world.pulse_radius > 40.0, "(前提) 1 周目の波は、大きな半径まで広がった")
+
+	# 1 周目の波のあとに、別の所を歩いて確かめる (波の前の地図には、これが入っていない)
+	var walked := Vector3(170, 0, 170)
+	point_world.reveal_at(walked)
+	check(point_world.prev_image.get_pixelv(point_world.reveal.pixel_of(walked)).r == 0.0, "(前提) 波の前の地図には、そのあと歩いた所が入っていない")
+
+	# 2 周目: 落ちる。前回の波の範囲を引きずらず、世界全体が一様に崩れる
+	point_world.on_lost()
+	check(point_world.pulse_radius == 0.0 and _param(point_world, "pulse_radius") == 0.0, "2 周目の落下では、前回の波の範囲を残さない (全体が一様に崩れる)")
+	check(point_world.prev_image.get_pixelv(point_world.reveal.pixel_of(walked)).r > 0.9, "2 周目の落下では、波の前の地図を、いまの地図に合わせる (1 周目のあとに歩いた所が、未確認の表示に戻らない)")
+	await _seconds(0.9)
+	check(point_world.disturbance > 0.99, "2 周目も、崩れが最大になる")
+	point_world.on_rescan(Vector3(150, 0, 40))
+	await _seconds(PointWorld.PULSE_SECONDS + PointWorld.RECOVER_SECONDS + 0.5)
+	check(point_world.disturbance == 0.0 and _param(point_world, "pulse_enabled") == 0.0, "2 周目もおさまる")
+
+	# 再構成の波の最中に、篝火で休む。再構成の印を上書きせず、波が終われば、遠くの崩れが戻る
+	point_world.on_lost()
+	await _seconds(0.9)
+	point_world.on_rescan(fire_a)
+	await _seconds(0.5)
+	point_world.on_rest(Vector3(150, 0, 150))
+	check(point_world.pulse_active, "(前提) 休むと、新しい波が出る")
+	await _seconds(PointWorld.PULSE_SECONDS + PointWorld.RECOVER_SECONDS + 0.6)
+	check(point_world.disturbance == 0.0, "再構成の最中に休んでも、波が終われば、崩れが戻る (%.2f)" % point_world.disturbance)
+	check(_param(point_world, "pulse_enabled") == 0.0, "再構成の最中に休んでも、波の範囲が外れる (古い地図で描き続けない)")
+
+	# 崩れている最中に休んでも (まず起きないが)、崩れたままにならない
+	point_world.on_lost()
+	await _seconds(0.9)
+	point_world.on_rest(Vector3(50, 0, 150))
+	await _seconds(PointWorld.PULSE_SECONDS + PointWorld.RECOVER_SECONDS + 0.6)
+	check(point_world.disturbance == 0.0, "崩れている最中に休んでも、波が終われば、崩れが戻る")
+
+	point_world.queue_free()
+	world.queue_free()
+	player.queue_free()
 	await process_frame

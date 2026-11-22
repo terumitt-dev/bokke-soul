@@ -6,6 +6,10 @@ uniform sampler2D screen_texture : hint_screen_texture, filter_linear;
 uniform float intensity : hint_range(0.0, 1.0) = 0.0;
 uniform float time_seconds = 0.0;
 uniform vec4 tint : source_color = vec4(1.0, 0.85, 0.5, 1.0);
+uniform float band_count = 28.0;  // 走査線のずれる帯の数
+uniform float flicker_rate = 14.0;  // ずれる帯が入れ替わる回数 (回/秒)
+uniform float shift_amount = 0.18;  // 帯が横へずれる最大の量 (画面の幅に対する割合)
+uniform float split_amount = 0.012;  // 赤と青のにじみの量
 
 float rand(vec2 p) {
 	return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
@@ -13,14 +17,14 @@ float rand(vec2 p) {
 
 void fragment() {
 	// 帯ごとに、画面を横へずらす (走査線のずれ)。時間で、ずれる帯が変わる
-	float band = floor(UV.y * 28.0);
-	float flicker = floor(time_seconds * 14.0);
+	float band = floor(UV.y * band_count);
+	float flicker = floor(time_seconds * flicker_rate);
 	float r = rand(vec2(band, flicker));
-	float shift = (r - 0.5) * 0.18 * intensity * step(0.62, r);
+	float shift = (r - 0.5) * shift_amount * intensity * step(0.62, r);
 	vec2 uv = vec2(UV.x + shift, UV.y);
 
 	// 色のにじみ (赤と青を、左右へずらす)
-	float split = 0.012 * intensity;
+	float split = split_amount * intensity;
 	vec3 color = vec3(
 		texture(screen_texture, uv + vec2(split, 0.0)).r,
 		texture(screen_texture, uv).g,

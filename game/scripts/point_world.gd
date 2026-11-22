@@ -116,8 +116,16 @@ func set_mode(new_mode: Mode) -> void:
 
 # 落ちて、位置を見失った。世界が崩れ始め、画面にノイズがかかる (Player が、グループへ知らせる)
 func on_lost() -> void:
+	# 前回の波の範囲 (半径と、波の前の地図) を引きずらない。引きずると、その円の中は崩れず、
+	# 円の外は、古い地図 (前回の波のあとに歩いた所が、まだ未確認のまま) で描かれてしまう。
+	# 世界全体が、いまの地図で、一様に崩れるようにする
+	pulse_active = false
+	pulse_radius = 0.0
+	prev_image = reveal.snapshot()
+	_prev_texture.update(prev_image)
 	_disturbance_target = 1.0
 	_glitch_target = 1.0
+	_update_effect(0.0)  # 次のフレームを待たず、すぐシェーダーへ伝える (1 フレームだけ古い波の範囲で描かれないように)
 
 
 # 最後の篝火へ戻った。そこから波が広がって、世界が再構成される (Player が、グループへ知らせる)
@@ -132,6 +140,8 @@ func on_rest(position: Vector3) -> void:
 
 
 # position を中心に、radius (m) を確かめた所にして、波を出す。
+# 波の最中に、もう一度呼ばれた時 (再構成の最中に休んだ時など) は、前の波は、ここで確定させる
+# (前の波がまだ届いていない所は、すぐ確定した表示になる。まず起きない操作なので、許す)。
 # 地図には最終の範囲を先に書き込み、波の前の地図を別に残す。シェーダーは、波が通った所だけ、新しい地図を見せる
 func _start_scan(position: Vector3, radius: float, rebuild: bool) -> void:
 	prev_image = reveal.snapshot()
@@ -142,7 +152,9 @@ func _start_scan(position: Vector3, radius: float, rebuild: bool) -> void:
 	_pulse_center = position
 	_pulse_time = 0.0
 	_pulse_max = radius * PULSE_OVERSHOOT
-	_rebuild = rebuild
+	# 崩れが残っている間 (再構成の最中に休んだ時など) は、新しい波が終わった時に、崩れを戻し始める。
+	# 再構成の印を上書きすると、波が終わっても崩れが戻らず、遠くが崩れたままになる
+	_rebuild = rebuild or _disturbance_target > 0.0
 
 
 # position の周り、radius (m) を確かめた所にして、すぐシェーダーへ反映する

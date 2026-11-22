@@ -22,12 +22,7 @@ uniform vec4 unexplored_color : source_color = vec4(0.45, 0.5, 0.62, 1.0);
 uniform vec4 pulse_color : source_color = vec4(1.0, 0.9, 0.6, 1.0);
 uniform float time_seconds = 0.0;
 
-uniform float disturbance = 0.0;  // 世界の崩れ具合 (0〜1)
-uniform float pulse_enabled = 0.0;  // 波の範囲を使う間 (波が広がっている間と、遠くの崩れが戻るまで)
-uniform vec3 pulse_center;
-uniform float pulse_radius = 0.0;  // 波の、いまの半径 (m)
-uniform float pulse_edge = 3.0;  // 波の縁の幅 (m)
-uniform float ring_strength = 0.0;  // 波の縁の光の強さ (0〜1)
+#include "res://shaders/scan_wave.gdshaderinc"
 
 varying float v_keep;
 varying float v_reveal;
@@ -51,11 +46,10 @@ void vertex() {
 	vec3 world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	vec2 uv = (world.xz - reveal_origin) / reveal_size;
 
-	// 波が通り過ぎた所は 1。波がない時は 0 (崩れは、世界全体にかかる)
 	float dist = distance(world.xz, pulse_center.xz);
-	float passed = pulse_enabled * (1.0 - smoothstep(pulse_radius - pulse_edge, pulse_radius, dist));
-	float reveal = mix(textureLod(prev_reveal_tex, uv, 0.0).r, textureLod(reveal_tex, uv, 0.0).r, mix(1.0, passed, pulse_enabled));
-	float broken = disturbance * (1.0 - passed);
+	float passed = wave_passed(dist);
+	float reveal = wave_reveal(textureLod(prev_reveal_tex, uv, 0.0).r, textureLod(reveal_tex, uv, 0.0).r, passed);
+	float broken = wave_broken(passed);
 
 	// 崩れると、点が散らばって (少し浮かんで)、ほとんど消える
 	VERTEX += (vec3(rand(id, 8u), rand(id, 9u), rand(id, 10u)) - 0.5) * broken * 10.0;
@@ -66,7 +60,7 @@ void vertex() {
 	v_reveal = reveal;
 	v_near = 1.0 - smoothstep(10.0, 80.0, distance(world, player_position));
 	// 波の縁。点が大きく、明るくなる
-	v_ring = exp(-pow((dist - pulse_radius) / pulse_edge, 2.0)) * ring_strength * pulse_enabled;
+	v_ring = wave_ring(dist);
 
 	// まだの所の点は、ゆらいで見える (ノイズ)。確かめた所は、動かない
 	uint tick = uint(floor(time_seconds * 3.0));
