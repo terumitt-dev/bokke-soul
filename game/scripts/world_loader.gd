@@ -39,6 +39,7 @@ static func load_world(path: String) -> Dictionary:
 		return {"node": null, "error": "シーンを作れませんでした: " + path}
 
 	_convert_importer_meshes(world)
+	_ensure_normals(world)
 	var material := StandardMaterial3D.new()
 	material.albedo_color = TERRAIN_COLOR
 	material.roughness = 1.0
@@ -79,6 +80,62 @@ static func pick_start(meshes: Array, target: Vector3) -> Vector3:
 					best_distance = distance
 					best = world_vertex
 	return best
+
+
+# 法線 (面の向き) のないメッシュに、法線を作る。
+# 法線がないと、Godot は全ての面が同じ向きだと見なして、光 (太陽、月、篝火) が、起伏と関係なく、
+# 半分の面にしか当たらない。変換ツールは法線を書き出すが、古い GLB や、ほかの GLB には、ないことがある。
+# 法線のあるメッシュには、何もしない (読み込みが遅くならない)
+static func _ensure_normals(world: Node) -> void:
+	for instance: MeshInstance3D in world.find_children("*", "MeshInstance3D", true, false):
+		var mesh := instance.mesh as ArrayMesh
+		if mesh == null or not _lacks_normals(mesh):
+			continue  # 法線がそろっているメッシュは、確かめるだけ。作り直さない (無駄な作成の時間とメモリを避ける)
+		var rebuilt := ArrayMesh.new()
+		for surface in mesh.get_surface_count():
+			var arrays := mesh.surface_get_arrays(surface)
+			var primitive := mesh.surface_get_primitive_type(surface)
+			if _surface_lacks_normals(mesh, surface):
+				arrays[Mesh.ARRAY_NORMAL] = _smooth_normals(arrays[Mesh.ARRAY_VERTEX], arrays[Mesh.ARRAY_INDEX])
+			rebuilt.add_surface_from_arrays(primitive, arrays)
+			rebuilt.surface_set_material(surface, mesh.surface_get_material(surface))
+		instance.mesh = rebuilt
+
+
+# 法線のないサーフェスがあるか。サーフェスの形式の情報だけを見る (頂点の配列を取り出さないので、速い)
+static func _lacks_normals(mesh: ArrayMesh) -> bool:
+	for surface in mesh.get_surface_count():
+		if _surface_lacks_normals(mesh, surface):
+			return true
+	return false
+
+
+# 三角形のサーフェスで、法線を持たないか (点や線のサーフェスには、法線は要らない)
+static func _surface_lacks_normals(mesh: ArrayMesh, surface: int) -> bool:
+	return (
+		mesh.surface_get_primitive_type(surface) == Mesh.PRIMITIVE_TRIANGLES
+		and (mesh.surface_get_format(surface) & Mesh.ARRAY_FORMAT_NORMAL) == 0
+	)
+
+
+# 頂点ごとの法線。頂点につながる三角形の法線を、面積に比例した重みで平均する (滑らかな陰影)
+static func _smooth_normals(vertices: PackedVector3Array, indices: Variant) -> PackedVector3Array:
+	var normals := PackedVector3Array()
+	normals.resize(vertices.size())
+	var triangle_indices: PackedInt32Array = indices if indices != null else PackedInt32Array()
+	var count := triangle_indices.size() if not triangle_indices.is_empty() else vertices.size()
+	for i in range(0, count - 2, 3):
+		var ia := triangle_indices[i] if not triangle_indices.is_empty() else i
+		var ib := triangle_indices[i + 1] if not triangle_indices.is_empty() else i + 1
+		var ic := triangle_indices[i + 2] if not triangle_indices.is_empty() else i + 2
+		# Godot の表は、時計回り。この順の外積が、表の向き (長さは面積に比例)
+		var face := (vertices[ic] - vertices[ia]).cross(vertices[ib] - vertices[ia])
+		normals[ia] += face
+		normals[ib] += face
+		normals[ic] += face
+	for i in normals.size():
+		normals[i] = normals[i].normalized() if normals[i].length_squared() > 0.0 else Vector3.UP
+	return normals
 
 
 # 実行時に GLB を読むと、メッシュは取り込み用の ImporterMeshInstance3D になる。
