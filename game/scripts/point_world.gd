@@ -114,6 +114,15 @@ func set_mode(new_mode: Mode) -> void:
 		mesh.visible = mode == Mode.MESH_AND_POINTS
 
 
+# 保存した地図 (PNG) を戻す。受け付けなければ false。波の前の地図も、戻した地図に合わせる
+func restore_reveal(png: PackedByteArray) -> bool:
+	if not reveal.load_png(png):
+		return false
+	prev_image = reveal.snapshot()
+	_prev_texture.update(prev_image)
+	return true
+
+
 # 落ちて、位置を見失った。世界が崩れ始め、画面にノイズがかかる (Player が、グループへ知らせる)
 func on_lost() -> void:
 	# 前回の波の範囲 (半径と、波の前の地図) を引きずらない。引きずると、その円の中は崩れず、

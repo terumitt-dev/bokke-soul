@@ -27,7 +27,11 @@ const RESCAN_SECONDS := 1.5
 const REST_DISTANCE := 2.5
 const NOTICE_SECONDS := 1.5
 
+# 篝火で休んだ時 (position は篝火の位置)。セーブなどが聞く
+signal rested(position: Vector3)
+
 var spawn_position: Vector3
+var has_rested := false  # 篝火で休んだことがあるか (休んだことがなければ、復帰地点は、最初の地点)
 var rescanning := false
 var nearby_bonfire: Node3D
 var message_id := 0
@@ -181,8 +185,19 @@ func rest() -> void:
 	if rescanning or nearby_bonfire == null:
 		return
 	spawn_position = nearby_bonfire.rest_position()
+	has_rested = true
+	# 先に、点の表現が、周囲を確かめた所にする。そのあとで知らせる (その時にセーブされる)。
+	# 逆だと、休んで確かめた範囲が、セーブに入らない
 	get_tree().call_group("point_world", "on_rest", nearby_bonfire.global_position)
+	# 休んだ知らせを先に出す。保存に失敗した時の知らせが、そのあとで上に出て、残るように
 	_show_message("基準点を確定しました", NOTICE_SECONDS)
+	rested.emit(nearby_bonfire.global_position)
+
+
+# 画面に、しばらくメッセージを出す。あとから出した知らせが、前の知らせの上に出て、残る
+# (保存の失敗など、プレイヤーに必ず伝えたい知らせは、休んだ知らせに上書きされない)
+func notice(text: String, seconds: float) -> void:
+	_show_message(text, seconds)
 
 
 # 床の下へ落ちたら、位置を見失った演出を出して最後に休んだ篝火へ戻す

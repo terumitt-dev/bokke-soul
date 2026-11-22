@@ -27,6 +27,7 @@ var fixed_hour := 12.0
 var weather_enabled := true
 var weather_seed := 0
 var point_mode := "mesh_and_points"
+var save_enabled := true
 
 
 static func load_from(path: String = PATH) -> GameSettings:
@@ -50,6 +51,10 @@ static func load_from(path: String = PATH) -> GameSettings:
 	var world_seed: Variant = file.get_value("weather", "seed", "")
 	if world_seed is int and absi(world_seed) <= MAX_SEED:
 		settings.weather_seed = world_seed
+
+	var save_value: Variant = file.get_value("save", "enabled", "")
+	if save_value is bool:
+		settings.save_enabled = save_value
 
 	var point_mode_value: Variant = file.get_value("look", "point_mode", "")
 	if point_mode_value is String and point_mode_value in POINT_MODES:

@@ -72,3 +72,9 @@ steps:
     image: barichello/godot-ci:4.7.2
     commands:
       - sh game/tests/run.sh reveal_test
+
+  # セーブ (保存と読み込み、壊れたセーブ、新しいバージョン、地図の復元、ゲームへの組み込み、タイトル画面) の動作テスト
+  - name: save-test
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - sh game/tests/run.sh save_test

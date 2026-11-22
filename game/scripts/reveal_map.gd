@@ -80,6 +80,27 @@ func coverage() -> float:
 	return float(count) / float(width() * height())
 
 
+# 地図を PNG にする (保存用。大きな地図も、小さく圧縮される)
+func to_png() -> PackedByteArray:
+	return _image.save_png_to_buffer()
+
+
+# PNG から地図を戻す。壊れている、大きさが違う (世界が変わった) 時は、受け付けず、地図は変えない
+func load_png(bytes: PackedByteArray) -> bool:
+	if bytes.is_empty():
+		return false
+	var image := Image.new()
+	if image.load_png_from_buffer(bytes) != OK:
+		return false
+	if image.get_width() != width() or image.get_height() != height():
+		return false
+	image.convert(Image.FORMAT_R8)
+	_image = image
+	_dirty = true
+	update_texture()
+	return true
+
+
 # いまの地図のコピー。あとから書き込んでも、このコピーは変わらない (波の前の状態を残すのに使う)
 func snapshot() -> Image:
 	return _image.duplicate()
