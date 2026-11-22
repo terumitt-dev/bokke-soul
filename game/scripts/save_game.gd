@@ -16,6 +16,8 @@ const MAX_COORDINATE := 1.0e7  # 位置として受け付ける大きさ (m)
 static var directory := "user://saves"
 # ヘッドレスでも有効にする (セーブのテスト用)
 static var allow_headless := false
+# 書き込みの途中で失敗する (ディスクの空きがない時など) ことを再現する (セーブのテスト用)
+static var fail_writes := false
 
 
 static func enabled() -> bool:
@@ -54,14 +56,13 @@ static func write(world_path: String, state: Dictionary) -> bool:
 	full["world_id"] = world_id(world_path)
 	full["saved_at"] = Time.get_datetime_string_from_system(true)
 
-	# 一時ファイルへ書いてから、付け替える。書いている途中で落ちても、いまのセーブは壊れない
+	# 一時ファイルへ書いてから、付け替える。書いている途中で落ちても、いまのセーブは壊れない。
+	# 書き込みが失敗したら (ディスクの空きがない時など)、いまのセーブは置き換えず、一時ファイルを消して false を返す
 	var temp := path + ".tmp"
-	var file := FileAccess.open(temp, FileAccess.WRITE)
-	if file == null:
-		push_warning("セーブを書けませんでした: %s (エラー %d)" % [temp, FileAccess.get_open_error()])
+	if not _store(temp, JSON.stringify(full)):
+		push_warning("セーブを書けませんでした: " + temp)
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(temp))
 		return false
-	file.store_string(JSON.stringify(full))
-	file.close()
 	var temp_os := ProjectSettings.globalize_path(temp)
 	var path_os := ProjectSettings.globalize_path(path)
 	if DirAccess.rename_absolute(temp_os, path_os) != OK:
@@ -71,6 +72,22 @@ static func write(world_path: String, state: Dictionary) -> bool:
 			push_warning("セーブを付け替えられませんでした: " + path)
 			return false
 	return true
+
+
+# 文字を、ファイルへ書く。書き込みと、書き出し (flush) の結果を確かめて、成功した時だけ true
+static func _store(path: String, text: String) -> bool:
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		return false
+	if fail_writes:
+		file.store_string(text.substr(0, text.length() / 2))  # 途中までしか書けなかった、を再現する
+		file.close()
+		return false
+	var written := file.store_string(text)
+	file.flush()
+	var ok := written and file.get_error() == OK
+	file.close()
+	return ok
 
 
 # 読む。{"status": ..., "state": ...}。status は次のどれか:

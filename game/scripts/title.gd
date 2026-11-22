@@ -18,6 +18,8 @@ var auto_change_scene := true
 var resolved_path := ""
 var credit := {"credit": "", "license_url": ""}
 var has_save := false
+# 設定。テストで差し替えられる (なければ、設定ファイルから読む)
+var settings: GameSettings
 var _new_game_confirming := false
 
 @onready var camera: Camera3D = $Camera3D
@@ -35,6 +37,8 @@ var _new_game_confirming := false
 
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if settings == null:
+		settings = GameSettings.load_from()
 	resolved_path = WorldLoader.resolve_path(world_path)
 	_load_background()
 	apply_credit(WorldLoader.credit_for(resolved_path))
@@ -105,9 +109,10 @@ func apply_credit(info: Dictionary) -> void:
 	credits_body.text = "\n".join(body)
 
 
-# セーブがあれば、「つづきから」と「はじめから」を出す。なければ「はじめる」だけ
+# セーブがあれば、「つづきから」と「はじめから」を出す。なければ「はじめる」だけ。
+# 設定でセーブを切っている時は、ゲームが、復元も保存もしないので、出さない (消せもしない)
 func _refresh_save() -> void:
-	has_save = SaveGame.read(resolved_path).status == "ok"
+	has_save = settings.save_enabled and SaveGame.read(resolved_path).status == "ok"
 	start_button.text = "つづきから" if has_save else "はじめる"
 	new_game_button.visible = has_save
 	_new_game_confirming = false

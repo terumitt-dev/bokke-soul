@@ -186,8 +186,10 @@ func rest() -> void:
 		return
 	spawn_position = nearby_bonfire.rest_position()
 	has_rested = true
-	rested.emit(nearby_bonfire.global_position)
+	# 先に、点の表現が、周囲を確かめた所にする。そのあとで知らせる (その時にセーブされる)。
+	# 逆だと、休んで確かめた範囲が、セーブに入らない
 	get_tree().call_group("point_world", "on_rest", nearby_bonfire.global_position)
+	rested.emit(nearby_bonfire.global_position)
 	_show_message("基準点を確定しました", NOTICE_SECONDS)
 
 

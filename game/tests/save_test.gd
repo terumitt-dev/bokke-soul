@@ -10,6 +10,15 @@ const SAMPLE := "res://assets/sample_world.glb"
 var failures: Array[String] = []
 
 
+# 「休んだ」の順序を記録する (点の表現の役。on_rest が呼ばれた時に記録する)
+class Recorder:
+	extends Node
+	var events: Array[String] = []
+
+	func on_rest(_position: Vector3) -> void:
+		events.append("rest")
+
+
 func check(ok: bool, label: String) -> void:
 	print(("PASS " if ok else "FAIL ") + label)
 	if not ok:
@@ -33,6 +42,7 @@ func _initialize() -> void:
 	_clean()
 	_test_guard()
 	_test_round_trip()
+	_test_write_failure()
 	_test_broken_and_versions()
 	_test_reveal_png()
 	_test_time_restore()
@@ -87,6 +97,36 @@ func _test_round_trip() -> void:
 
 	SaveGame.delete(SAMPLE)
 	check(not SaveGame.exists(SAMPLE), "消せる")
+
+
+func _test_write_failure() -> void:
+	# 保存先に作れない (途中の名前が、フォルダではなくファイル) と、書けずに、false を返す。止まらない
+	var blocker := TEST_DIR + "/blocker"
+	var file := FileAccess.open(blocker, FileAccess.WRITE)
+	file.store_string("ファイル")
+	file.close()
+	var original := SaveGame.directory
+	SaveGame.directory = blocker + "/sub"
+	check(not SaveGame.write(SAMPLE, _state()), "保存先を作れない時は、保存できず、false を返す (止まらない)")
+	SaveGame.directory = original
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(blocker))
+
+	# 書き込みの結果は、確かめてから付け替える。確かめる部分 (_store) が、失敗を false で返すこと
+	check(SaveGame._store(TEST_DIR + "/ok.tmp", "中身"), "書き込みが成功すれば、true")
+	check(FileAccess.get_file_as_string(TEST_DIR + "/ok.tmp") == "中身", "書き込んだ中身が、そのまま入る")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(TEST_DIR + "/ok.tmp"))
+	check(not SaveGame._store(TEST_DIR + "/no_such_dir/x.tmp", "中身"), "書き込めない場所では、false を返す")
+
+	# 既存のセーブがあるところへ、書き込みに失敗しても、既存のセーブは、そのまま残る
+	SaveGame.write(SAMPLE, _state(Vector3(7, 7, 7)))
+	var before := FileAccess.get_file_as_string(SaveGame.path_for(SAMPLE))
+	SaveGame.fail_writes = true  # 書き込みの失敗を再現する (テスト用)
+	check(not SaveGame.write(SAMPLE, _state(Vector3(8, 8, 8))), "書き込みに失敗したら、保存できず、false を返す")
+	SaveGame.fail_writes = false
+	check(FileAccess.get_file_as_string(SaveGame.path_for(SAMPLE)) == before, "書き込みに失敗しても、既存のセーブは、そのまま残る (不完全なファイルで置き換えない)")
+	check(not FileAccess.file_exists(SaveGame.path_for(SAMPLE) + ".tmp"), "書き込みに失敗しても、一時ファイルが残らない")
+	check(SaveGame.read(SAMPLE).status == "ok", "失敗のあとも、前のセーブを読める")
+	SaveGame.delete(SAMPLE)
 
 
 func _test_broken_and_versions() -> void:
@@ -209,7 +249,15 @@ func _test_game() -> void:
 		await process_frame
 	var rested_positions: Array[Vector3] = []
 	player.rested.connect(func(position: Vector3) -> void: rested_positions.append(position))
+	# 休んだ時の順序: 点の表現が、周囲を確かめた所にしてから、「休んだ」が知らされる (その時にセーブされる)。
+	# 逆だと、休んで確かめた範囲が、セーブに入らない
+	var order := Recorder.new()
+	order.add_to_group("point_world")
+	scene.add_child(order)
+	player.rested.connect(func(_position: Vector3) -> void: order.events.append("rested"))
 	player.rest()
+	check(order.events == ["rest", "rested"], "休むと、先に周囲が確かめた所になり、そのあとで「休んだ」と知らされる (順序: %s)" % [order.events])
+	order.remove_from_group("point_world")
 	check(rested_positions.size() == 1 and rested_positions[0].is_equal_approx(fire.global_position), "休むと、Player が「休んだ」と知らせる (篝火の位置つき)")
 	check(player.has_rested, "休んだら、休んだことを覚える")
 	check(SaveGame.exists(SAMPLE), "篝火で休むと、セーブされる")
@@ -340,6 +388,20 @@ func _test_title() -> void:
 	with_save.start_requested.connect(func(path: String) -> void: started.append(path))
 	with_save.start_button.pressed.emit()
 	check(started == [SAMPLE] and SaveGame.exists(SAMPLE), "「つづきから」は、セーブを残したまま始まる")
+
+	# 設定で、セーブを切っている時は、「つづきから」も「はじめから」も出さない (ゲームは、復元も保存もしないため)
+	var disabled: Node = load("res://scenes/title.tscn").instantiate()
+	disabled.world_path = SAMPLE
+	disabled.auto_change_scene = false
+	var off := GameSettings.new()
+	off.save_enabled = false
+	disabled.settings = off
+	root.add_child(disabled)
+	await process_frame
+	check(disabled.start_button.text == "はじめる" and not disabled.new_game_button.visible, "セーブを切っていれば、セーブがあっても、「つづきから」「はじめから」は出ない")
+	check(SaveGame.exists(SAMPLE), "セーブを切っていても、セーブは消されない (はじめから、が出ないので、消せない)")
+	disabled.queue_free()
+	await process_frame
 
 	# 「はじめから」は、1 回目で確認を出し、2 回目でセーブを消して始まる (うっかり消さない)
 	started.clear()
