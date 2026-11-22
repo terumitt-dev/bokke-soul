@@ -156,6 +156,9 @@ def convert(
     # 測量の座標は値が大きい (10^5 以上になることがある) ので、メッシュは原点付近に作る。
     # float32 の精度落ちを避けるため。元の原点は metadata に残す
     mesh = to_godot_axes(surface_mesh(grid, voxel_size, np.zeros(3)))
+    # 角で頂点を共有したままだと、法線が角で平均されて、ボクセルの面が丸く光る。
+    # 頂点を面ごとに分けて、角ばった (面ごとの) 法線にする (形は変わらない)
+    mesh.unmerge_vertices()
     mesh.metadata["origin"] = origin
     mesh.metadata["voxel_size"] = voxel_size
     return mesh
@@ -176,9 +179,13 @@ def apply_credit(mesh: trimesh.Trimesh, args: argparse.Namespace) -> None:
 
 
 def write_outputs(mesh: trimesh.Trimesh, output: Path) -> None:
-    """GLB と、元の座標に戻すための原点を書いた .json を書き出す。"""
+    """GLB と、元の座標に戻すための原点を書いた .json を書き出す。
+
+    頂点の法線 (面の向き) を、GLB に必ず入れる。法線がないと、Godot は全ての面が同じ向きだと見なして、
+    光 (太陽、月、篝火) が、起伏と関係なく、半分の面にしか当たらない。
+    """
     output.parent.mkdir(parents=True, exist_ok=True)
-    mesh.export(output)
+    mesh.export(output, include_normals=True)
     meta = {
         "origin": [float(x) for x in mesh.metadata["origin"]],
         "axes": "GLB の (x, y, z) は、測量座標の (x, z, -y)。戻すには (x, -z, y) に直してから origin を足す",

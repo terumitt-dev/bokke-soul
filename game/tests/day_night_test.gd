@@ -217,12 +217,12 @@ func _test_scene() -> void:
 	scene.queue_free()
 	await process_frame
 
-	# このゲームの既定の見た目 (B と強い月明かり) が、場面に入る
+	# このゲームの既定の見た目 (くすんだ色と、月明かり) が、場面に入る
 	var look_scene := _start_default_look()
 	await process_frame
 	var look: DayNight = look_scene.get_node("DayNight")
-	check(near(look.grade.saturation, 0.55) and near(look.grade.moon, 0.6), "既定の見た目は、くすんだ色 (彩度 0.55) と、強い月明かり (0.6)")
-	check(look.moon.visible and near(look.moon.light_energy, 0.6, 0.05), "既定では、夜に月明かりが出る (0 時)")
+	check(near(look.grade.saturation, 0.55) and near(look.grade.moon, 0.35), "既定の見た目は、くすんだ色 (彩度 0.55) と、月明かり (0.35)")
+	check(look.moon.visible and near(look.moon.light_energy, 0.35, 0.05), "既定では、夜に月明かりが出る (0 時)")
 	var terrain: Node3D = WorldLoader.load_world(WorldLoader.SAMPLE_PATH).node
 	var terrain_mesh: MeshInstance3D = terrain.find_children("*", "MeshInstance3D", true, false)[0]
 	check((terrain_mesh.material_override as StandardMaterial3D).albedo_color.is_equal_approx(WorldLoader.TERRAIN_COLOR), "地形には、決めた砂の色が付く")

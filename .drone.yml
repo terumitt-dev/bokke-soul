@@ -72,3 +72,9 @@ steps:
     image: barichello/godot-ci:4.7.2
     commands:
       - sh game/tests/run.sh reveal_test
+
+  # 地形の法線 (法線のない GLB でも、読み込む時に作ること。サンプルの世界に法線があること) の動作テスト
+  - name: normals-test
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - sh game/tests/run.sh normals_test

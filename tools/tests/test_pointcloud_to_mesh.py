@@ -52,8 +52,11 @@ def test_converted_mesh_is_outward_facing():
 def test_converted_single_voxel_is_closed_and_outward():
     points = np.random.default_rng(0).uniform(0, 1, (200, 3))
     mesh = p2m.convert(points, voxel_size=1.0, min_points=1, min_component=1)
-    assert mesh.is_watertight
-    assert mesh.volume == pytest.approx(1.0)
+    # 変換後は、角ばった法線のために、頂点を面ごとに分けてある。頂点を統合し直せば、閉じた形になっている
+    merged = mesh.copy()
+    merged.merge_vertices()
+    assert merged.is_watertight
+    assert mesh.volume == pytest.approx(1.0)  # 内向きなら負になる
 
 
 def test_mesh_is_centered_near_the_origin():
