@@ -52,9 +52,27 @@ func _start_world(path: String, with_save := false) -> Node:
 
 func _initialize() -> void:
 	var loaded: Dictionary = WorldLoader.load_world(SAMPLE)
+	root.add_child(loaded.node)  # 木に入れてから、座標を求める (入っていないと、座標変換ができない)
+	await process_frame
 	var meshes: Array = loaded.node.find_children("*", "MeshInstance3D", true, false)
-	var ground := WorldLoader.pick_start(meshes, Vector3.ZERO)  # サンプルの地面の、ある点 (ゲームの座標)
+	var ground := WorldLoader.pick_start(meshes, Vector3(10.0, 0.0, -10.0))  # サンプルの地面の、ある点 (ゲームの座標)
+	var heights := WorldLoader.surface_heights(meshes, ground.x, ground.z)
+	check(heights.any(func(h: float) -> bool: return absf(h - ground.y) < 0.01), "サンプルの地面の点で、面の高さのどれかが、その点の高さと合う (サンプルは、面が重なる): %s / %s" % [heights, ground])
 	loaded.node.free()
+
+	# 面の高さ: 頂点の間隔が広くても (三角形の中を内挿する)、面のない所は空
+	var big_mesh := ArrayMesh.new()
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array([Vector3(0, 0, 0), Vector3(100, 10, 0), Vector3(0, 0, 100), Vector3(100, 10, 100)])
+	arrays[Mesh.ARRAY_INDEX] = PackedInt32Array([0, 1, 2, 1, 3, 2])
+	big_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var big := MeshInstance3D.new()
+	big.mesh = big_mesh
+	var sparse := WorldLoader.surface_heights([big], 50.0, 50.0)
+	check(sparse.size() >= 1 and absf(sparse[0] - 5.0) < 0.01, "頂点が 100 m 離れていても、真ん中の面の高さを、内挿して求める (最寄りの頂点までは 70 m): %s" % [sparse])
+	check(WorldLoader.surface_heights([big], 150.0, 50.0).is_empty() and WorldLoader.surface_heights([big], 50.0, -5.0).is_empty(), "面のない所 (範囲の外) は、空")
+	big.free()
 
 	# 読み込み (測量座標 → ゲームの座標)
 	var base := {"origin": [ORIGIN.x, ORIGIN.y, ORIGIN.z]}

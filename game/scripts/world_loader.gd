@@ -104,6 +104,34 @@ static func world_id_for(path: String) -> String:
 	return ""
 
 
+# 水平位置 (x, z) の真上、または真下にある、メッシュの面の高さを、すべて返す (三角形の中にある所を、内挿する)。
+# 頂点の間隔が広いメッシュでも、地面の高さが分かる。面がない所 (範囲の外、穴) は、空
+static func surface_heights(meshes: Array, x: float, z: float) -> Array[float]:
+	var heights: Array[float] = []
+	for mesh: MeshInstance3D in meshes:
+		var transform := mesh.global_transform if mesh.is_inside_tree() else mesh.transform
+		for surface in mesh.mesh.get_surface_count():
+			var arrays := mesh.mesh.surface_get_arrays(surface)
+			var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
+			var count := indices.size() if not indices.is_empty() else vertices.size()
+			for i in range(0, count - 2, 3):
+				var a := transform * vertices[indices[i] if not indices.is_empty() else i]
+				var b := transform * vertices[indices[i + 1] if not indices.is_empty() else i + 1]
+				var c := transform * vertices[indices[i + 2] if not indices.is_empty() else i + 2]
+				if x < minf(a.x, minf(b.x, c.x)) or x > maxf(a.x, maxf(b.x, c.x)) or z < minf(a.z, minf(b.z, c.z)) or z > maxf(a.z, maxf(b.z, c.z)):
+					continue
+				var denominator := (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z)
+				if absf(denominator) < 1.0e-9:
+					continue  # 真上から見て、面積がない三角形
+				var wa := ((b.z - c.z) * (x - c.x) + (c.x - b.x) * (z - c.z)) / denominator
+				var wb := ((c.z - a.z) * (x - c.x) + (a.x - c.x) * (z - c.z)) / denominator
+				var wc := 1.0 - wa - wb
+				if wa >= -1.0e-6 and wb >= -1.0e-6 and wc >= -1.0e-6:
+					heights.append(wa * a.y + wb * b.y + wc * c.y)
+	return heights
+
+
 # target に水平方向で一番近い、メッシュの頂点を返す。頂点は面のあるところにしかない
 static func pick_start(meshes: Array, target: Vector3) -> Vector3:
 	var best := target
