@@ -176,6 +176,19 @@ static func read(world_path: String) -> Dictionary:
 	return result
 
 
+# どのエリアでも、遊んだ記録が 1 つでもあるか (「はじめから」を出すかの判断。エリアの記録がなくても、最後に遊んだエリアだけが
+# 書かれた状態 (移った先で、保存する前に終わった時) でも、進行は、残っている)
+static func has_any() -> bool:
+	var path := path_for()
+	if not enabled() or not FileAccess.file_exists(path):
+		return false
+	var json := JSON.new()
+	if json.parse(FileAccess.get_file_as_string(path)) != OK or not (json.data is Dictionary):
+		return false
+	var areas: Variant = (json.data as Dictionary).get("areas")
+	return areas is Dictionary and not (areas as Dictionary).is_empty()
+
+
 # 最後に遊んだエリアの世界の名前 (「つづきから」で、そこから始めるため)。セーブがない、使えない、書かれていない時は空
 static func current_area() -> String:
 	var path := path_for()

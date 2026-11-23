@@ -46,6 +46,7 @@ var _path := ""  # 読み込んだ世界の場所
 var _entry := {}  # この世界の、一覧 (WorldRegistry) での情報
 var _exits := {}  # 隣のマップ (方角 → 情報)
 var _arrival := {}  # 前のマップから引き継いだもの (WorldLoader.arrival)
+var _setup_points_position := Vector3.ZERO  # 探索地図を作った時の、プレイヤーの位置 (着く位置で作られたかを、テストで確かめる)
 var _arrived_at := 0  # 着いた時刻 (ミリ秒)
 var _traveling := false
 var _overlay: CanvasLayer
@@ -88,10 +89,12 @@ func _ready() -> void:
 		player.spawn_position = start
 		_add_start_bonfire(meshes, start)
 
+	_place_arrival(meshes)
+	_setup_points_position = player.global_position  # テスト用: 探索地図を作る時の、プレイヤーの位置
 	_points = _add_points(world)
 	_setup_save(meshes)
 	_setup_exits()
-	_apply_arrival(meshes)
+	_finish_arrival()
 
 
 # 出口の準備。同じ置き場の、隣り合うマップを探す。隣がなければ、出口はない
@@ -105,15 +108,16 @@ func _setup_exits() -> void:
 		_exits = WorldRegistry.neighbors(entries, _entry)
 
 
-# 前のマップから移ってきたなら、着いた位置に立ち、視点の向きと時刻を引き継ぐ。画面は、暗転から戻す。
-# 篝火で休んだことがあるマップは、復帰地点は、保存した篝火のまま。まだなら、着いた位置が復帰地点
-func _apply_arrival(meshes: Array) -> void:
+# 前のマップから移ってきたなら、着く位置を決めて、そこに立たせる (探索地図を作る前に。作る時の位置を、着く位置にするため。
+# 先に、いつもの始まりの位置を使うと、行っていない所が、探索済みになる)。着く位置の地面の高さに合わせる
+# (傾斜のある所で、地面に埋まらない、高く浮きすぎない)。引き継ぎが不正なら、何もしない
+func _place_arrival(meshes: Array) -> void:
 	_arrived_at = Time.get_ticks_msec()
-	if _arrival.is_empty() or not _arrival.has("position"):
+	if not (_arrival.get("position") is Vector3):
+		_arrival = {}
 		return
 	var position: Vector3 = _arrival.position
-	# 着く所の地面の高さに合わせる (傾斜のある所で、地面に埋まらない、高く浮きすぎない)。前のマップで立っていた高さに、いちばん近い面
-	var ground := position.y - START_HEIGHT
+	var ground := position.y - START_HEIGHT  # 前のマップで立っていた高さに、いちばん近い面を選ぶ
 	var heights := WorldLoader.surface_heights(meshes, position.x, position.z)
 	if not heights.is_empty():
 		heights.sort_custom(func(a: float, b: float) -> bool: return absf(a - ground) < absf(b - ground))
@@ -124,12 +128,24 @@ func _apply_arrival(meshes: Array) -> void:
 		var nearest := WorldLoader.pick_start(meshes, position)
 		ground = nearest.y
 		position = Vector3(nearest.x, nearest.y + START_HEIGHT, nearest.z)
+	_arrival["landing"] = position
+	_arrival["ground"] = ground
 	player.global_position = position
 	player.velocity = Vector3.ZERO
-	if not player.has_rested:
-		player.spawn_position = Vector3(position.x, ground + 0.05, position.z)
 	player.pivot.rotation.y = float(_arrival.get("yaw", player.pivot.rotation.y))
 	player.pivot.rotation.x = float(_arrival.get("pitch", player.pivot.rotation.x))
+
+
+# 保存を読んだあとの仕上げ (保存した位置に立たせる処理があるので、そのあと、もう一度、着く位置に立たせる)。
+# 篝火で休んだことがあるマップは、復帰地点は、保存した篝火のまま。まだなら、着いた位置。時刻を引き継ぎ、暗転から戻す
+func _finish_arrival() -> void:
+	if not _arrival.has("landing"):
+		return
+	var landing: Vector3 = _arrival.landing
+	player.global_position = landing
+	player.velocity = Vector3.ZERO
+	if not player.has_rested:
+		player.spawn_position = Vector3(landing.x, float(_arrival.ground) + 0.05, landing.z)
 	if _arrival.has("time"):
 		_apply_time(_arrival.time)
 	if _entry.get("name", "") != "":
@@ -176,8 +192,13 @@ func _travel(direction: String) -> void:
 	_veil_label.visible = true
 	await _fade(1.0)
 	traveled.emit(target.path)
-	if auto_change_scene:
-		get_tree().change_scene_to_file(GAME_SCENE)
+	if auto_change_scene and get_tree().change_scene_to_file(GAME_SCENE) != OK:
+		# 場面を切り替えられなかった。暗転を戻して、しばらくしてから、もう一度試す
+		WorldLoader.arrival = {}
+		_traveling = false
+		_arrived_at = Time.get_ticks_msec() + SAVE_RETRY_MS - EXIT_COOLDOWN_MS
+		_veil_label.visible = false
+		_fade(0.0)
 
 
 # 暗転の幕。画面全体を覆う黒と、「読み込み中」の文字

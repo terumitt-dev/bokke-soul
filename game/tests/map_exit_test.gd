@@ -125,6 +125,7 @@ func _initialize() -> void:
 	check(player_b.global_position.y < 50.0, "着く高さは、地面に合わせる (引き継いだ高さが、桁外れでも、空高くに出ない): %s" % [player_b.global_position.y])
 	check(scene_b.get_node("DayNight").time.total_hours >= 40.0, "時刻が、引き継がれる (%.2f)" % scene_b.get_node("DayNight").time.total_hours)
 	check(world_b._exits.size() == 1 and world_b._exits.has("west"), "B の隣は、西の A だけ")
+	check(Vector2(world_b._setup_points_position.x - 6.0, world_b._setup_points_position.z + size.z / 2.0).length() < 0.5, "探索地図は、着く位置を、プレイヤーの位置として作られる (いつもの始まりの位置の周りを、探索済みにしない): %s" % [world_b._setup_points_position])
 	# 着いた直後は、端に寄っても、すぐには移らない (行き来を繰り返さない)。時間が過ぎれば、移る
 	player_b.global_position = Vector3(1.0, 3.0, -size.z / 2.0)
 	for i in 10:
@@ -136,6 +137,16 @@ func _initialize() -> void:
 		await physics_frame
 	check(WorldLoader.arrival.get("path") == path_a, "時間が過ぎれば、西の端から A へ戻れる")
 	scene_b.queue_free()
+	await process_frame
+	WorldLoader.arrival = {}
+
+	# 引き継ぎの位置が不正 (Vector3 でない): 無視して、いつも通り始まる
+	WorldLoader.arrival = {"path": path_b, "position": "どこか"}
+	var scene_bad := _start_world("")
+	for i in 20:
+		await physics_frame
+	check(scene_bad.get_node("World")._path == path_b and scene_bad.get_node("Player").global_position.y > -50.0, "引き継ぎの位置が不正でも、そのマップで、いつも通り始まる")
+	scene_bad.queue_free()
 	await process_frame
 	WorldLoader.arrival = {}
 
@@ -201,6 +212,21 @@ func _initialize() -> void:
 	await title._new_game()
 	check(title.resolved_path == path_a, "はじめからは、始まりの世界 (A) から")
 	title.queue_free()
+	await process_frame
+
+	# 移った先で、保存する前に終わった (最後に遊んだエリアは B、記録があるのは A だけ): 「つづきから」と「はじめから」が出る
+	SaveGame.delete()
+	SaveGame.write(path_a, {"has_rested": true})
+	SaveGame.set_current_area(path_b)
+	check(SaveGame.has_any() and SaveGame.read(path_b).status == "none", "(準備) 記録があるのは A だけ。最後に遊んだのは B")
+	var title2: Node = load("res://scenes/title.tscn").instantiate()
+	title2.settings = GameSettings.new()
+	title2.auto_change_scene = false
+	title2.world_path = path_a
+	root.add_child(title2)
+	await process_frame
+	check(title2.resolved_path == path_b and title2.has_save and title2.new_game_button.visible and title2.start_button.text == "つづきから", "記録のないマップが再開先でも、「つづきから」と「はじめから」が出る (進行を、消して始め直せる)")
+	title2.queue_free()
 	await process_frame
 	SaveGame.delete()
 	SaveGame.allow_headless = false

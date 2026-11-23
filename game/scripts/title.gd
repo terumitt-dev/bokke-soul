@@ -132,7 +132,9 @@ func apply_credit(info: Dictionary) -> void:
 # セーブがあれば、「つづきから」と「はじめから」を出す。なければ「はじめる」だけ。
 # 設定でセーブを切っている時は、ゲームが、復元も保存もしないので、出さない (消せもしない)
 func _refresh_save() -> void:
-	has_save = settings.save_enabled and SaveGame.read(resolved_path).status == "ok"
+	# 続きがあるか: どこかのエリアに、遊んだ記録があれば。表示するマップに記録がなくても (移った先で、保存する前に終わった時)、
+	# 「つづきから」と「はじめから」を出す (進行があるのに、消して始め直せなくならない)
+	has_save = settings.save_enabled and (SaveGame.read(resolved_path).status == "ok" or SaveGame.has_any())
 	start_button.text = "つづきから" if has_save else "はじめる"
 	new_game_button.visible = has_save
 	_new_game_confirming = false
