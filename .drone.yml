@@ -84,3 +84,9 @@ steps:
     image: barichello/godot-ci:4.7.2
     commands:
       - sh game/tests/run.sh normals_test
+
+  # マップの篝火 (データの .json の bonfire と name を、測量座標から置き、そこから始まり、名前を出して休めること) の動作テスト
+  - name: area-bonfire-test
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - sh game/tests/run.sh area_bonfire_test

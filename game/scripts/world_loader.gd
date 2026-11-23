@@ -50,47 +50,86 @@ static func load_world(path: String) -> Dictionary:
 	return {"node": world, "error": ""}
 
 
-# 世界のデータの隣にある .json (変換ツールが書く) から、出典を読む。
-# {"credit": 出典の文, "license_url": ライセンスの URL}。なければ空の文字列
-static func credit_for(path: String) -> Dictionary:
-	var result := {"credit": "", "license_url": ""}
+# 世界のデータの隣にある .json (変換ツールが書く) を読む。なければ、壊れていれば、辞書でなければ、空の辞書。
+# JSON.parse_string は壊れた入力でエラーを出すので、結果だけを受け取る。.json がなくても、ゲームは動く
+static func read_sidecar(path: String) -> Dictionary:
 	var sidecar := path.get_basename() + ".json"
 	if not FileAccess.file_exists(sidecar):
-		return result
-	# JSON.parse_string は壊れた入力でエラーを出すので、結果だけを受け取る。出典がなくても、ゲームは動く
+		return {}
 	var json := JSON.new()
-	if json.parse(FileAccess.get_file_as_string(sidecar)) != OK:
-		return result
-	if json.data is Dictionary:
-		for key: String in result:
-			if json.data.get(key) is String:
-				result[key] = json.data[key]
+	if json.parse(FileAccess.get_file_as_string(sidecar)) != OK or not (json.data is Dictionary):
+		return {}
+	return json.data
+
+
+# .json から、出典を読む。{"credit": 出典の文, "license_url": ライセンスの URL}。なければ空の文字列
+static func credit_for(path: String) -> Dictionary:
+	var result := {"credit": "", "license_url": ""}
+	var data := read_sidecar(path)
+	for key: String in result:
+		if data.get(key) is String:
+			result[key] = data[key]
 	return result
 
 
-# 世界の測量座標での原点 (データの隣の .json の origin)。ない、または不正な時は null
+# 世界の測量座標での原点 (.json の origin)。ない、または不正な時は null
 static func origin_for(path: String) -> Variant:
-	var sidecar := path.get_basename() + ".json"
-	if not FileAccess.file_exists(sidecar):
-		return null
-	var json := JSON.new()
-	if json.parse(FileAccess.get_file_as_string(sidecar)) != OK or not (json.data is Dictionary):
-		return null
-	return SaveGame.decode_vector(json.data.get("origin"))
+	return SaveGame.decode_vector(read_sidecar(path).get("origin"))
 
 
-# 世界の名前 (データの隣の .json の world_id)。ない、または、ファイル名に使えない文字を含む時は空
+# マップの名前 (.json の name。例: 寒天林道)。ない、文字でない、空白だけの時は空
+static func name_for(path: String) -> String:
+	var value: Variant = read_sidecar(path).get("name")
+	return (value as String).strip_edges() if value is String else ""
+
+
+# 篝火を置く場所を、ゲームの座標 (x, 高さ, z) で返す。.json の bonfire (測量座標 [東, 北, 標高]) を、
+# origin を引いて、軸を直す。測量座標で持っているので、世界を作り直して原点が動いても、同じ場所を指す。
+# bonfire か origin がない、または、不正なら null
+static func bonfire_for(path: String) -> Variant:
+	var data := read_sidecar(path)
+	var survey: Variant = SaveGame.decode_vector(data.get("bonfire"))
+	var origin: Variant = SaveGame.decode_vector(data.get("origin"))
+	if survey == null or origin == null:
+		return null
+	var moved: Vector3 = survey - origin  # 測量座標 (東, 北, 標高) での、原点からの距離
+	return Vector3(moved.x, moved.z, -moved.y)
+
+
+# 世界の名前 (.json の world_id)。ない、または、ファイル名に使えない文字を含む時は空
 static func world_id_for(path: String) -> String:
-	var sidecar := path.get_basename() + ".json"
-	if not FileAccess.file_exists(sidecar):
-		return ""
-	var json := JSON.new()
-	if json.parse(FileAccess.get_file_as_string(sidecar)) != OK or not (json.data is Dictionary):
-		return ""
-	var value: Variant = json.data.get("world_id")
+	var value: Variant = read_sidecar(path).get("world_id")
 	if value is String and WORLD_ID_PATTERN.search(value) != null:
 		return value
 	return ""
+
+
+# 水平位置 (x, z) の真上、または真下にある、メッシュの面の高さを、すべて返す (三角形の中にある所を、内挿する)。
+# 頂点の間隔が広いメッシュでも、地面の高さが分かる。面がない所 (範囲の外、穴) は、空
+static func surface_heights(meshes: Array, x: float, z: float) -> Array[float]:
+	var heights: Array[float] = []
+	for mesh: MeshInstance3D in meshes:
+		var transform := mesh.global_transform if mesh.is_inside_tree() else mesh.transform
+		for surface in mesh.mesh.get_surface_count():
+			var arrays := mesh.mesh.surface_get_arrays(surface)
+			var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
+			var count := indices.size() if not indices.is_empty() else vertices.size()
+			for i in range(0, count - 2, 3):
+				var a := transform * vertices[indices[i] if not indices.is_empty() else i]
+				var b := transform * vertices[indices[i + 1] if not indices.is_empty() else i + 1]
+				var c := transform * vertices[indices[i + 2] if not indices.is_empty() else i + 2]
+				if x < minf(a.x, minf(b.x, c.x)) or x > maxf(a.x, maxf(b.x, c.x)) or z < minf(a.z, minf(b.z, c.z)) or z > maxf(a.z, maxf(b.z, c.z)):
+					continue
+				var denominator := (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z)
+				if absf(denominator) < 1.0e-9:
+					continue  # 真上から見て、面積がない三角形
+				var wa := ((b.z - c.z) * (x - c.x) + (c.x - b.x) * (z - c.z)) / denominator
+				var wb := ((c.z - a.z) * (x - c.x) + (a.x - c.x) * (z - c.z)) / denominator
+				var wc := 1.0 - wa - wb
+				if wa >= -1.0e-6 and wb >= -1.0e-6 and wc >= -1.0e-6:
+					heights.append(wa * a.y + wb * b.y + wc * c.y)
+	return heights
 
 
 # target に水平方向で一番近い、メッシュの頂点を返す。頂点は面のあるところにしかない
