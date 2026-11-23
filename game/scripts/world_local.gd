@@ -124,18 +124,29 @@ func _setup_save() -> void:
 
 
 # 読んだセーブを、ゲームへ反映する。項目ごとに検証して、不正なものは、黙って無視する
+# 世界を作り直して、原点が動いていた時は、保存した位置を、新しい原点に合わせて直す (地下や空中に出さない)。
+# 確かめた所の地図は、水平の原点が同じ時だけ使う (動いていたら、ずれて重なるので、使わない)
 func _apply_save(state: Dictionary) -> void:
-	var kept: Variant = state.get("reveal_png")
+	var saved_origin: Variant = SaveGame.decode_vector(state.get("origin"))
+	var origin: Variant = WorldLoader.origin_for(_save_world)
+	var shift := Vector3.ZERO
+	var same_map := true
+	if saved_origin != null and origin != null:
+		var moved: Vector3 = saved_origin - origin  # 測量座標 (東, 北, 標高) での、原点の動き
+		shift = Vector3(moved.x, moved.z, -moved.y)  # ゲームの座標 (x, 高さ, z) に直す
+		same_map = is_zero_approx(moved.x) and is_zero_approx(moved.y)
+	var kept: Variant = state.get("reveal_png") if same_map else null
 	if kept is String:
 		_loaded_reveal = kept
 	var spawn: Variant = SaveGame.decode_vector(state.get("spawn"))
 	if spawn != null:
+		spawn += shift
 		player.global_position = spawn
 		player.spawn_position = spawn
 		player.velocity = Vector3.ZERO
 		player.has_rested = true
 	if _points != null:
-		_points.restore_reveal(SaveGame.decode_bytes(state.get("reveal_png")))
+		_points.restore_reveal(SaveGame.decode_bytes(kept))
 	var saved_time: Variant = state.get("time_total_hours")
 	var day_night := get_node_or_null("../DayNight")
 	if day_night != null and (saved_time is float or saved_time is int):
@@ -147,6 +158,9 @@ func save_now() -> bool:
 	if not _save_active:
 		return false
 	var state := {"has_rested": player.has_rested}
+	var origin: Variant = WorldLoader.origin_for(_save_world)
+	if origin != null:
+		state["origin"] = SaveGame.encode_vector(origin)  # 位置は、この原点からの値。世界を作り直したら、直すのに使う
 	if player.has_rested:
 		state["spawn"] = SaveGame.encode_vector(player.spawn_position)
 	var day_night := get_node_or_null("../DayNight")

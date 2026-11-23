@@ -191,21 +191,22 @@ def add_world_id_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def derive_world_id(source: Path, origin: np.ndarray) -> str:
-    """元データの名前 (タイル番号があればそれ) と原点から、世界の名前を決める。
+def derive_world_id(source: Path, anchor: np.ndarray) -> str:
+    """元データの名前 (タイル番号があればそれ) と、元データ全体の南西の角から、世界の名前を決める。
 
-    同じ場所なら、作り直しても、メッシュの細かさや切り出しを変えても、同じ名前になる
-    (範囲や細かさは、名前の元にしない)。別の場所なら、原点が違うので、別の名前になる。
+    anchor は、切り出す前の、入力全体の (東, 北) の最小値。切り出しやメッシュの細かさを変えても、
+    同じ入力なら同じ名前になる (メッシュの原点は、切り出しや間引きで動くので、使わない)。
+    別の場所の入力なら、角が違うので、別の名前になる。
     """
     tile = TILE_PATTERN.search(source.stem)
     name = tile.group(0) if tile else re.sub(r"[^A-Za-z0-9]+", "-", source.stem).strip("-")[:40] or "world"
-    spot = f"{float(origin[0]):.2f},{float(origin[1]):.2f}"
+    spot = f"{float(anchor[0]):.2f},{float(anchor[1]):.2f}"
     return f"{name}-{hashlib.sha256(spot.encode()).hexdigest()[:8]}"
 
 
-def apply_world_id(mesh: trimesh.Trimesh, args: argparse.Namespace, source: Path) -> None:
-    """--world-id か、入力と原点から決めた世界の名前を、メッシュの付属情報に入れる。"""
-    world_id = getattr(args, "world_id", None) or derive_world_id(source, mesh.metadata["origin"])
+def apply_world_id(mesh: trimesh.Trimesh, args: argparse.Namespace, source: Path, anchor: np.ndarray) -> None:
+    """--world-id か、入力と anchor から決めた世界の名前を、メッシュの付属情報に入れる。"""
+    world_id = getattr(args, "world_id", None) or derive_world_id(source, anchor)
     if not WORLD_ID_PATTERN.fullmatch(world_id):
         raise ValueError(f"世界の名前は、英数字と . _ - の 64 文字までです: {world_id!r}")
     mesh.metadata["world_id"] = world_id
@@ -248,7 +249,7 @@ def main() -> None:
     print(f"読み込み: {len(points):,} 点")
     mesh = convert(points, args.voxel, args.min_points, args.min_component, tuple(args.crop) if args.crop else None)
     apply_credit(mesh, args)
-    apply_world_id(mesh, args, args.input)
+    apply_world_id(mesh, args, args.input, points[:, :2].min(axis=0))  # 切り出す前の、入力全体の角
     write_outputs(mesh, args.output)
 
 

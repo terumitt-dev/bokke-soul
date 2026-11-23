@@ -97,7 +97,7 @@ def main() -> None:
     print(f"読み込み: {z.shape[1]} x {z.shape[0]} の格子 (欠け {int(np.isnan(z).sum()):,})")
     mesh = convert(xs, ys, z, args.stride)
     apply_credit(mesh, args)
-    apply_world_id(mesh, args, args.input)
+    apply_world_id(mesh, args, args.input, np.array([xs[0], ys[0]]))  # 間引く前の、格子全体の角
     write_outputs(mesh, args.output)
 
 

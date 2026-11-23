@@ -51,6 +51,7 @@ func _initialize() -> void:
 	await _test_failure_notice()
 	await _test_close_with_failed_save()
 	await _test_points_off_keeps_map()
+	await _test_rebuilt_world()
 	await _test_start_bonfire()
 	await _test_title()
 	_clean()
@@ -123,7 +124,7 @@ func _test_named_world() -> void:
 	f.close()
 	check(SaveGame.read(world).status == "ok", "データを作り直しても (中身が変わっても)、名前が同じなら、セーブが続く")
 
-	for bad in ["../evil", ".hidden", "a/b", "", 5, "x".repeat(65)]:
+	for bad in ["../evil", ".hidden", "a/b", "", 5, "x".repeat(65), "abc\n"]:
 		f = FileAccess.open(sidecar, FileAccess.WRITE)
 		f.store_string(JSON.stringify({"world_id": bad}))
 		f.close()
@@ -372,6 +373,88 @@ func _test_game() -> void:
 	newer.queue_free()
 	await process_frame
 	SaveGame.delete(SAMPLE)
+
+
+func _write_frame(sidecar: String, origin: Array) -> void:
+	var f := FileAccess.open(sidecar, FileAccess.WRITE)
+	f.store_string(JSON.stringify({"world_id": "frame-test", "origin": origin}))
+	f.close()
+
+
+func _start_world_at(path: String) -> Node:
+	var scene: Node = load("res://scenes/world_local.tscn").instantiate()
+	var settings := GameSettings.new()
+	settings.weather_enabled = false
+	scene.get_node("DayNight").settings = settings
+	scene.get_node("World").world_path = path
+	root.add_child(scene)
+	return scene
+
+
+# 世界を作り直して、原点が動いた時: 標高が動けば、保存した位置も同じだけ動き (地下に出ない)、
+# 水平が動けば、位置を直した上で、ずれて重なる確かめた所の地図は使わない
+func _test_rebuilt_world() -> void:
+	var dir := TEST_DIR + "/frame"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	var world := dir + "/world.glb"
+	var sidecar := dir + "/world.json"
+	var f := FileAccess.open(world, FileAccess.WRITE)
+	f.store_buffer(FileAccess.get_file_as_bytes(SAMPLE))
+	f.close()
+	_write_frame(sidecar, [1000.0, 2000.0, 50.0])
+	SaveGame.delete(world)
+
+	var scene := _start_world_at(world)
+	for i in 40:
+		await physics_frame
+	var player: CharacterBody3D = scene.get_node("Player")
+	var fire: Node3D = load("res://scenes/bonfire.tscn").instantiate()
+	scene.add_child(fire)
+	fire.global_position = player.global_position + Vector3(1.0, 0.0, 0.0)
+	for i in 5:
+		await process_frame
+	player.rest()
+	var point_world: PointWorld = scene.get_node("World").find_children("*", "PointWorld", false, false)[0]
+	var painted: Vector3 = fire.global_position
+	point_world.reveal_at(painted, 4.0)
+	scene.get_node("World").save_now()
+	var saved: Dictionary = SaveGame.read(world).state
+	var spawn: Vector3 = SaveGame.decode_vector(saved.spawn)
+	check(saved.world_id == "frame-test" and SaveGame.decode_vector(saved.origin).is_equal_approx(Vector3(1000, 2000, 50)), "名前のある世界のセーブに、原点が入る")
+	scene.queue_free()
+	await process_frame
+	await process_frame
+
+	# 標高の原点だけが 100 m 下がった (地形が、ゲームの中で 100 m 上がる): 保存した位置も、100 m 上がる
+	_write_frame(sidecar, [1000.0, 2000.0, 150.0])
+	var raised := _start_world_at(world)
+	for i in 40:
+		await physics_frame
+	var p2: CharacterBody3D = raised.get_node("Player")
+	check(is_equal_approx(p2.spawn_position.y, spawn.y - 100.0) and is_equal_approx(p2.spawn_position.x, spawn.x), "標高の原点が動いたら、保存した位置も、同じだけ動く (地下に出ない): %s → %s" % [spawn, p2.spawn_position])
+	var pw2: PointWorld = raised.get_node("World").find_children("*", "PointWorld", false, false)[0]
+	var pw2_coverage: float = pw2.reveal.coverage()
+	check(pw2.reveal.sample(painted) > 0.5, "標高だけが動いた時は、確かめた所の地図を、そのまま使う")
+	raised.queue_free()
+	await process_frame
+	await process_frame
+
+	# 水平の原点が動いた (東へ 10 m): 位置を直し、地図は使わない
+	_write_frame(sidecar, [1010.0, 2000.0, 50.0])
+	var shifted := _start_world_at(world)
+	for i in 40:
+		await physics_frame
+	var p3: CharacterBody3D = shifted.get_node("Player")
+	check(is_equal_approx(p3.spawn_position.x, spawn.x - 10.0) and is_equal_approx(p3.spawn_position.z, spawn.z), "水平の原点が動いたら、位置を直す: %s → %s" % [spawn, p3.spawn_position])
+	var pw3: PointWorld = shifted.get_node("World").find_children("*", "PointWorld", false, false)[0]
+	check(pw3.reveal.coverage() < pw2_coverage - 0.001, "水平が動いた時は、ずれて重なる地図を使わない (確かめた割合 %.3f → %.3f)" % [pw2_coverage, pw3.reveal.coverage()])
+	shifted.queue_free()
+	await process_frame
+
+	for file in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(dir + "/" + file))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))
+	_clean()
 
 
 # 休んで保存に失敗したら、そのことが画面に出て、「基準点を確定しました」に上書きされず、読める時間、残る
