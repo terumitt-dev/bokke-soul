@@ -50,74 +50,55 @@ static func load_world(path: String) -> Dictionary:
 	return {"node": world, "error": ""}
 
 
-# 世界のデータの隣にある .json (変換ツールが書く) から、出典を読む。
-# {"credit": 出典の文, "license_url": ライセンスの URL}。なければ空の文字列
-static func credit_for(path: String) -> Dictionary:
-	var result := {"credit": "", "license_url": ""}
+# 世界のデータの隣にある .json (変換ツールが書く) を読む。なければ、壊れていれば、辞書でなければ、空の辞書。
+# JSON.parse_string は壊れた入力でエラーを出すので、結果だけを受け取る。.json がなくても、ゲームは動く
+static func read_sidecar(path: String) -> Dictionary:
 	var sidecar := path.get_basename() + ".json"
 	if not FileAccess.file_exists(sidecar):
-		return result
-	# JSON.parse_string は壊れた入力でエラーを出すので、結果だけを受け取る。出典がなくても、ゲームは動く
+		return {}
 	var json := JSON.new()
-	if json.parse(FileAccess.get_file_as_string(sidecar)) != OK:
-		return result
-	if json.data is Dictionary:
-		for key: String in result:
-			if json.data.get(key) is String:
-				result[key] = json.data[key]
+	if json.parse(FileAccess.get_file_as_string(sidecar)) != OK or not (json.data is Dictionary):
+		return {}
+	return json.data
+
+
+# .json から、出典を読む。{"credit": 出典の文, "license_url": ライセンスの URL}。なければ空の文字列
+static func credit_for(path: String) -> Dictionary:
+	var result := {"credit": "", "license_url": ""}
+	var data := read_sidecar(path)
+	for key: String in result:
+		if data.get(key) is String:
+			result[key] = data[key]
 	return result
 
 
-# 世界の測量座標での原点 (データの隣の .json の origin)。ない、または不正な時は null
+# 世界の測量座標での原点 (.json の origin)。ない、または不正な時は null
 static func origin_for(path: String) -> Variant:
-	var sidecar := path.get_basename() + ".json"
-	if not FileAccess.file_exists(sidecar):
-		return null
-	var json := JSON.new()
-	if json.parse(FileAccess.get_file_as_string(sidecar)) != OK or not (json.data is Dictionary):
-		return null
-	return SaveGame.decode_vector(json.data.get("origin"))
+	return SaveGame.decode_vector(read_sidecar(path).get("origin"))
 
 
-# マップの名前 (データの隣の .json の name。例: 寒天林道)。なければ空
+# マップの名前 (.json の name。例: 寒天林道)。ない、文字でない、空白だけの時は空
 static func name_for(path: String) -> String:
-	var sidecar := path.get_basename() + ".json"
-	if not FileAccess.file_exists(sidecar):
-		return ""
-	var json := JSON.new()
-	if json.parse(FileAccess.get_file_as_string(sidecar)) != OK or not (json.data is Dictionary):
-		return ""
-	var value: Variant = json.data.get("name")
+	var value: Variant = read_sidecar(path).get("name")
 	return (value as String).strip_edges() if value is String else ""
 
 
-# 篝火を置く場所を、ゲームの座標 (x, 高さ, z) で返す。データの隣の .json の bonfire (測量座標 [東, 北, 標高]) を、
+# 篝火を置く場所を、ゲームの座標 (x, 高さ, z) で返す。.json の bonfire (測量座標 [東, 北, 標高]) を、
 # origin を引いて、軸を直す。測量座標で持っているので、世界を作り直して原点が動いても、同じ場所を指す。
 # bonfire か origin がない、または、不正なら null
 static func bonfire_for(path: String) -> Variant:
-	var sidecar := path.get_basename() + ".json"
-	if not FileAccess.file_exists(sidecar):
-		return null
-	var json := JSON.new()
-	if json.parse(FileAccess.get_file_as_string(sidecar)) != OK or not (json.data is Dictionary):
-		return null
-	var survey: Variant = SaveGame.decode_vector(json.data.get("bonfire"))
-	var origin: Variant = SaveGame.decode_vector(json.data.get("origin"))
+	var data := read_sidecar(path)
+	var survey: Variant = SaveGame.decode_vector(data.get("bonfire"))
+	var origin: Variant = SaveGame.decode_vector(data.get("origin"))
 	if survey == null or origin == null:
 		return null
 	var moved: Vector3 = survey - origin  # 測量座標 (東, 北, 標高) での、原点からの距離
 	return Vector3(moved.x, moved.z, -moved.y)
 
 
-# 世界の名前 (データの隣の .json の world_id)。ない、または、ファイル名に使えない文字を含む時は空
+# 世界の名前 (.json の world_id)。ない、または、ファイル名に使えない文字を含む時は空
 static func world_id_for(path: String) -> String:
-	var sidecar := path.get_basename() + ".json"
-	if not FileAccess.file_exists(sidecar):
-		return ""
-	var json := JSON.new()
-	if json.parse(FileAccess.get_file_as_string(sidecar)) != OK or not (json.data is Dictionary):
-		return ""
-	var value: Variant = json.data.get("world_id")
+	var value: Variant = read_sidecar(path).get("world_id")
 	if value is String and WORLD_ID_PATTERN.search(value) != null:
 		return value
 	return ""

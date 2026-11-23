@@ -39,13 +39,13 @@ func _survey_of(local: Vector3) -> Array:
 	return [local.x + ORIGIN.x, -local.z + ORIGIN.y, local.y + ORIGIN.z]
 
 
-func _start_world(path: String) -> Node:
+func _start_world(path: String, with_save := false) -> Node:
 	var scene: Node = load("res://scenes/world_local.tscn").instantiate()
 	var settings := GameSettings.new()
 	settings.weather_enabled = false
 	scene.get_node("DayNight").settings = settings
 	scene.get_node("World").world_path = path
-	scene.get_node("World").save_enabled = false  # 本物のセーブに触らない
+	scene.get_node("World").save_enabled = with_save  # 既定では、セーブしない。セーブを使う時は、専用の置き場 (SaveGame.directory) に向ける
 	root.add_child(scene)
 	return scene
 
@@ -108,6 +108,17 @@ func _initialize() -> void:
 	await process_frame
 	await process_frame
 
+	# 作り直した世界で、篝火が埋まる、浮く: 置かず、いつもの始まり方にする (埋まった所に立つと、落ちて、同じ位置へ戻ることを繰り返す)
+	for offset in [-1.9, 1.9]:
+		var survey := _survey_of(ground + Vector3(0.0, offset, 0.0))
+		var shifted := _make_world("shifted", {"origin": [ORIGIN.x, ORIGIN.y, ORIGIN.z], "bonfire": survey})
+		var odd := _start_world(shifted)
+		for i in 20:
+			await physics_frame
+		check(odd.find_child("AreaBonfire", true, false) == null and odd.find_child("StartBonfire", true, false) != null, "地面から %.1f m ずれた篝火 (%s) は置かず、いつもの始まり方にする" % [offset, "埋まる" if offset < 0 else "浮く"])
+		odd.queue_free()
+		await process_frame
+
 	# 場所が、世界の外 (地面のない所): いつもの始まり方にする
 	var outside := _make_world("outside", {"origin": [ORIGIN.x, ORIGIN.y, ORIGIN.z], "bonfire": [ORIGIN.x + 5000.0, ORIGIN.y, ORIGIN.z]})
 	var fallback := _start_world(outside)
@@ -116,6 +127,30 @@ func _initialize() -> void:
 	check(fallback.find_child("AreaBonfire", true, false) == null and fallback.find_child("StartBonfire", true, false) != null, "篝火の場所が世界の外なら、置かず、いつもの始まり方にする")
 	fallback.queue_free()
 	await process_frame
+
+	# マップの名前: 文字でない、空白だけ、は、名前なし
+	for bad_name in [5, "   ", "", null]:
+		var odd_name := _make_world("odd_name", {"name": bad_name})
+		check(WorldLoader.name_for(odd_name) == "", "名前が不正 (%s) なら、名前なし" % [bad_name])
+
+	# セーブがあれば、保存した位置が優先される (篝火は、そこへ置かれるが、プレイヤーは、保存した位置から始まる)
+	SaveGame.directory = DIR + "/saves"
+	SaveGame.allow_headless = true
+	var with_save := _make_world("with_save", {"world_id": "area-bonfire-save", "origin": [ORIGIN.x, ORIGIN.y, ORIGIN.z], "name": "保存", "bonfire": _survey_of(ground)})
+	var saved_spot := ground + Vector3(2.0, 0.05, 0.0)
+	check(SaveGame.write(with_save, {"has_rested": true, "spawn": SaveGame.encode_vector(saved_spot)}), "(準備) 保存した位置を書く")
+	var resumed := _start_world(with_save, true)
+	for i in 30:
+		await physics_frame
+	var resumed_player: CharacterBody3D = resumed.get_node("Player")
+	var resumed_fire: Node3D = resumed.find_child("AreaBonfire", true, false)
+	check(resumed_fire != null and resumed_fire.global_position.is_equal_approx(ground), "セーブがあっても、マップの篝火は、データの場所に置かれる")
+	check(resumed_player.spawn_position.is_equal_approx(saved_spot) and resumed_player.has_rested, "保存した位置が、あれば、そこが復帰地点 (篝火の位置より優先): %s" % [resumed_player.spawn_position])
+	resumed.queue_free()
+	await process_frame
+	SaveGame.delete()
+	SaveGame.allow_headless = false
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(DIR + "/saves"))
 
 	for file in DirAccess.get_files_at(DIR):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(DIR + "/" + file))

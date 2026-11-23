@@ -11,6 +11,8 @@ const START_BONFIRE_DISTANCE := 2.0  # 最初の篝火を、始めた場所の�
 const GROUND_MARGIN := 10.0  # 保存した位置の近くに、地面がある、と見なす水平の距離 (m)
 const UNDERGROUND_MARGIN := 2.0  # 保存した位置が、地面より、これ以上深いと、地中と見なす (m)
 const FRAME_TOLERANCE := 0.01  # 世界の形が同じ、と見なす差 (m)
+const SITE_NEAR := 3.0  # 篝火の場所の近くに、地面がある、と見なす水平の距離 (m)
+const SITE_HEIGHT := 0.5  # 篝火の場所と、近くの地面の、高さの差として許す (m)
 const NOTICE_SECONDS := 3.0  # 保存に失敗した知らせを出しておく時間 (休んだ知らせより長い)
 const CLOSE_HOLD_SECONDS := 8.0  # 閉じる時に保存に失敗した時、終了を保留しておく時間
 
@@ -102,9 +104,11 @@ func _on_close_requested() -> void:
 # 場所がない、または、作り直した世界で地面のない所 (範囲の外、地面の中) になる時は、置かず null を返す
 func _add_area_bonfire(path: String, meshes: Array) -> Node3D:
 	var place: Variant = WorldLoader.bonfire_for(path)
-	if place == null or not _is_on_ground(meshes, place):
+	# 篝火と、復帰する時に立つ位置の両方が、地面の上にあること (作り直した世界で、地面が上がって埋まる、下がって浮く、
+	# 範囲の外になる、のどれかなら置かない。立つ位置が埋まると、落ちて、同じ位置へ戻ることを繰り返す)
+	if place == null or not _site_is_solid(meshes, place) or not _site_is_solid(meshes, place + Bonfire.REST_OFFSET):
 		if place != null:
-			push_warning("篝火の場所に地面がないので、いつもの始まり方にします: " + str(place))
+			push_warning("篝火の場所が、作り直した世界の地面と合わないので、いつもの始まり方にします: " + str(place))
 		return null
 	var fire: Node3D = load("res://scenes/bonfire.tscn").instantiate()
 	fire.name = "AreaBonfire"
@@ -112,6 +116,13 @@ func _add_area_bonfire(path: String, meshes: Array) -> Node3D:
 	add_child(fire)
 	fire.global_position = place
 	return fire
+
+
+# position が、地面にほぼ接しているか。一番近い地面 (メッシュの頂点) が、水平に SITE_NEAR 以内で、高さの差が SITE_HEIGHT 以内
+# (セーブした位置の判定 _is_on_ground とは違い、埋まるのも、浮くのも許さない)
+func _site_is_solid(meshes: Array, position: Vector3) -> bool:
+	var ground := WorldLoader.pick_start(meshes, position)
+	return Vector2(ground.x - position.x, ground.z - position.z).length() <= SITE_NEAR and absf(position.y - ground.y) <= SITE_HEIGHT
 
 
 # 最初の基準点として、始めた場所のすぐ前に、篝火を 1 つ置く。ここで休める (休むとセーブされ、落ちたらここへ戻る)。

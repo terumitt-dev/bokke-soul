@@ -80,15 +80,9 @@ static func convert_position(from: Dictionary, to: Dictionary, position: Vector3
 	return Vector3(moved.x, moved.z, -moved.y)
 
 
-# data の隣の .json の size (GLB の幅・高さ・奥行き)。不正なら null
+# .json の size (GLB の幅・高さ・奥行き)。不正なら null
 static func _size_for(path: String) -> Variant:
-	var sidecar := path.get_basename() + ".json"
-	if not FileAccess.file_exists(sidecar):
-		return null
-	var json := JSON.new()
-	if json.parse(FileAccess.get_file_as_string(sidecar)) != OK or not (json.data is Dictionary):
-		return null
-	var size: Variant = SaveGame.decode_vector(json.data.get("size"))
+	var size: Variant = SaveGame.decode_vector(WorldLoader.read_sidecar(path).get("size"))
 	if size == null or (size as Vector3).x <= 0.0 or (size as Vector3).z <= 0.0:
 		return null
 	return size
