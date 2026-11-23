@@ -126,27 +126,17 @@ static func _store(path: String, text: String) -> bool:
 
 # 読む。{"status": ..., "state": ...}。status は次のどれか:
 #   none: セーブがない、または、この世界の記録がない / ok: 読めた / invalid: 壊れている (退けた) / newer: 新しいバージョンのセーブ (使わない)
+#   unavailable: 古いセーブを、新しい形に直せなかった (元は、そのまま残してある。このあいだ、保存しない)
 # state は、その世界の記録に、ゲーム全体の項目 (時刻)、version、world_id、saved_at を足したもの。
 # game は、ゲーム全体の項目 (時刻) だけ。この世界の記録がなくても (初めて訪れるエリアでも)、入る
 static func read(world_path: String) -> Dictionary:
 	var result := {"status": "none", "state": {}, "game": {}}
 	if not enabled():
 		return result
-	var pending := {}
-	if not _adopt_v1_game_file():
-		# 直せなかった。壊れたセーブとして退けず、そのまま残して、次に、もう一度試す。
-		# 世界の名前が game の世界なら、その古いセーブの中身を、そのまま使う (復元しないまま始めると、あとで保存が成功した時に、上書きしてしまう)
-		if world_id(world_path) != "game":
-			return result
-		pending = _read_legacy(path_for(), "game")
-	else:
-		pending = _import_legacy(world_path)
-	if not pending.is_empty():  # 取り込めなかった。古いセーブの中身を、そのまま使う
-		result.status = "ok"
-		result.state = _migrate(pending.merged({"version": VERSION, "world_id": world_id(world_path), "saved_at": ""}))
-		for key: String in GAME_KEYS:
-			if pending.has(key):
-				result.game[key] = pending[key]
+	# 古いセーブを新しい形に直せなかった時 (ディスクの空きがない時など): 使えない (unavailable)。
+	# 退けず、そのまま残して、次に、もう一度試す。呼び出し側は、このあいだ、保存しない (復元しないまま保存して、古い進行を置き換えないため)
+	if not _adopt_v1_game_file() or not _import_legacy(world_path):
+		result.status = "unavailable"
 		return result
 	var path := path_for(world_path)
 	if not FileAccess.file_exists(path):
@@ -252,12 +242,11 @@ static func _load_document(world_path: String) -> Dictionary:
 
 # バージョン 1 のセーブ (世界ごとに別のファイル) があれば、この世界の記録として取り込む。
 # すでにこの世界の記録があれば、取り込まない (新しい記録を、古いもので上書きしない)
-# 取り込めなかった (書き込みに失敗した) 時は、古いセーブの中身を返す (読む側が、メモリ上で使う。そうしないと、進行を復元せずに始めて、
-# あとで保存が成功した時に、復元していない状態で、古いセーブを置き換えてしまう)。それ以外は、空
-static func _import_legacy(world_path: String) -> Dictionary:
+# 古いセーブがあれば、取り込む。取り込めた、または、取り込むものがない時は true。取り込もうとして、書き込みに失敗した時は false
+static func _import_legacy(world_path: String) -> bool:
 	var id := world_id(world_path)
 	if _has_area(id) or (FileAccess.file_exists(path_for()) and _stored_version(path_for()) > VERSION):
-		return {}  # すでに取り込んだ、または、新しいバージョンのセーブがある (上書きしない)
+		return true  # すでに取り込んだ、または、新しいバージョンのセーブがある (上書きしない)
 	var candidates := [id]
 	var content := content_id(world_path)  # 世界の名前を付ける前の、データの中身から決めた識別子のセーブも探す
 	if content != id:
@@ -269,7 +258,6 @@ static func _import_legacy(world_path: String) -> Dictionary:
 		var imported := _read_legacy(legacy, candidate)
 		if imported.is_empty():
 			continue
-		var whole := imported.duplicate()
 		var document := _load_document(world_path)
 		var areas: Dictionary = document.areas
 		for key: String in GAME_KEYS:
@@ -279,13 +267,10 @@ static func _import_legacy(world_path: String) -> Dictionary:
 		areas[id] = imported
 		if not _write_document(document):
 			push_warning("古いセーブを取り込めませんでした。元のファイルは、そのまま残します: " + legacy)
-			for key: String in GAME_KEYS:  # 取り込めた時と同じく、いまあるゲーム全体の項目 (時刻) を優先する
-				if document.has(key):
-					whole[key] = document[key]
-			return whole  # 元のファイルは、そのままにしておく (次に、もう一度試す)
+			return false  # 元のファイルは、そのままにしておく (次に、もう一度試す)
 		DirAccess.rename_absolute(ProjectSettings.globalize_path(legacy), ProjectSettings.globalize_path(legacy + ".v1"))
-		return {}
-	return {}
+		return true
+	return true
 
 
 # セーブに、この世界の記録があるか (ファイルを退けたりはしない。壊れていれば、ない、と答える)

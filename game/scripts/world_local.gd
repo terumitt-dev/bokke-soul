@@ -124,6 +124,12 @@ func _setup_save(meshes: Array) -> void:
 		push_warning("新しいバージョンのセーブなので、続きからは始めず、保存もしません")
 		_save_active = false
 		return
+	if result.status == "unavailable":
+		# 古いセーブを新しい形に直せなかった (ディスクの空きがない時など)。復元しないまま保存して、古い進行を置き換えないよう、保存せずに遊ぶ
+		push_warning("古いセーブを読み込めなかったので、続きからは始めず、保存もしません")
+		_save_active = false
+		_notify.call_deferred("古いセーブを読み込めませんでした。このあいだは、保存しません")
+		return
 	if result.status == "ok":
 		_apply_save(result.state, meshes)
 	else:
