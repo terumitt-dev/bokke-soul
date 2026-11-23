@@ -99,6 +99,11 @@ func apply_credit(info: Dictionary) -> void:
 		if not url.is_empty():
 			body.append("  " + url)
 	body.append("")
+	body.append("地名 (篝火の名前)")
+	body.append("  近くの道、歩道、停留所の名前は、OpenStreetMap による")
+	body.append("  © OpenStreetMap contributors (ODbL)")
+	body.append("  https://www.openstreetmap.org/copyright")
+	body.append("")
 	body.append("書体")
 	body.append("  Cinzel (The Cinzel Project Authors)")
 	body.append("  Zen Old Mincho (The Zen Old Mincho Project Authors)")

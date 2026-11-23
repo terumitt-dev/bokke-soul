@@ -76,6 +76,7 @@ func _test_title() -> void:
 	check(not title.attribution.visible, "出典のないデータ (サンプル) では、隅に出典を出さない")
 	check("人工のサンプル" in title.credits_body.text, "クレジットに、サンプルだと書く")
 	check("Cinzel" in title.credits_body.text and "Zen Old Mincho" in title.credits_body.text and "Godot" in title.credits_body.text, "クレジットに、書体とエンジンを載せる")
+	check("OpenStreetMap contributors" in title.credits_body.text and "openstreetmap.org/copyright" in title.credits_body.text, "クレジットに、地名 (篝火の名前) の出典 (OpenStreetMap) を載せる")
 
 	var before: float = title.camera.rotation.y
 	for i in 20:

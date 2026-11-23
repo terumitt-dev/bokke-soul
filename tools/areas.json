@@ -1,0 +1,13 @@
+{
+  "credit": "VIRTUAL SHIZUOKA (静岡県) を加工して作成 / CC BY 4.0",
+  "license_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source": "2019-LP-Grid",
+  "crs": "EPSG:6676",
+  "areas": [
+    {"tile": "08OF3006", "name": "寒天林道"},
+    {"tile": "08OF3005", "name": "ウグイス歩道"},
+    {"tile": "08OF3016", "name": "八丁池口"},
+    {"tile": "08OF3007", "name": "寒天林道・東"},
+    {"tile": "08OF2096", "name": "寒天林道・北"}
+  ]
+}
