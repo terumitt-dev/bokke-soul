@@ -15,6 +15,7 @@ const SITE_HEIGHT := 0.5  # 篝火の場所と、その真下・真上の地面�
 const EXIT_MARGIN := 2.0  # 端から、これ以内に近づくと、隣のマップへ移る (m)
 const ARRIVAL_INSET := 6.0  # 隣のマップに着く時の、端からの距離 (m)。EXIT_MARGIN より大きくして、すぐ戻らないようにする
 const EXIT_COOLDOWN_MS := 1500  # 着いてから、出口が効くまでの時間
+const SAVE_RETRY_MS := 3000  # 保存に失敗して、移るのをやめた時に、もう一度試すまでの時間
 const FADE_SECONDS := 0.4
 const GAME_SCENE := "res://scenes/world_local.tscn"
 const NOTICE_SECONDS := 3.0  # 保存に失敗した知らせを出しておく時間 (休んだ知らせより長い)
@@ -118,6 +119,11 @@ func _apply_arrival(meshes: Array) -> void:
 		heights.sort_custom(func(a: float, b: float) -> bool: return absf(a - ground) < absf(b - ground))
 		ground = heights[0]
 		position.y = ground + START_HEIGHT
+	else:
+		# 着く所に面がない (地形の穴)。一番近い地面へ寄せる (穴の上に立つと、落ちて、同じ位置へ戻ることを繰り返す)
+		var nearest := WorldLoader.pick_start(meshes, position)
+		ground = nearest.y
+		position = Vector3(nearest.x, nearest.y + START_HEIGHT, nearest.z)
 	player.global_position = position
 	player.velocity = Vector3.ZERO
 	if not player.has_rested:
@@ -149,7 +155,12 @@ func _travel(direction: String) -> void:
 	var target: Dictionary = _exits[direction]
 	var position := WorldRegistry.clamp_inside(target, WorldRegistry.convert_position(_entry, target, player.global_position), ARRIVAL_INSET)
 	position.y += START_HEIGHT  # 少し上から降りる (面の高さは、着いてから、床が受ける)
-	save_now()
+	# 保存してから移る。最後に遊んだエリアは、行き先にする (着いてから一度も保存しないまま終わっても、行き先から始まる)。
+	# 保存に失敗したら、移らない (いまのマップの探索が、静かに失われないように)。しばらくしてから、もう一度試す
+	if _save_active and not (save_now() and SaveGame.set_current_area(target.path)):
+		_traveling = false
+		_arrived_at = Time.get_ticks_msec() + SAVE_RETRY_MS - EXIT_COOLDOWN_MS
+		return
 	var carried := {
 		"path": target.path,
 		"position": position,

@@ -190,6 +190,19 @@ static func current_area() -> String:
 	return ""
 
 
+# 最後に遊んだエリアを、world_path の世界にする (別のマップへ移る時に、行き先にする)。書けたら true。
+# セーブが無効、まだない、新しいバージョン、のどれかなら、何もせず、true (保存できない時の判断は、呼び出し側)
+static func set_current_area(world_path: String) -> bool:
+	var path := path_for()
+	if not enabled() or not FileAccess.file_exists(path):
+		return true
+	if _stored_version(path) > VERSION:
+		return true
+	var document := _load_document(world_path)
+	document["current_area"] = world_id(world_path)
+	return _write_document(document)
+
+
 # 「はじめから」: セーブを消す (ゲーム全体。どのエリアの記録も、時刻も消える)。
 # まだ取り込んでいない古い (バージョン 1) セーブも、取り込まれないようにする (消さずに .v1 にする。消した進行が、よみがえらないように)。
 # 新しいバージョンのセーブは、消さない

@@ -32,13 +32,13 @@ func _make_world(name: String, id: String, label: String, origin: Vector3, size:
 	return world
 
 
-func _start_world(path: String) -> Node:
+func _start_world(path: String, with_save := false) -> Node:
 	var scene: Node = load("res://scenes/world_local.tscn").instantiate()
 	var settings := GameSettings.new()
 	settings.weather_enabled = false
 	scene.get_node("DayNight").settings = settings
 	scene.get_node("World").world_path = path
-	scene.get_node("World").save_enabled = false  # 本物のセーブに触らない
+	scene.get_node("World").save_enabled = with_save  # 既定では、セーブしない。使う時は、専用の置き場 (SaveGame.directory) に向ける
 	scene.get_node("World").auto_change_scene = false  # 場面は切り替えず、引き継ぎ (WorldLoader.arrival) を確かめる
 	root.add_child(scene)
 	return scene
@@ -139,8 +139,49 @@ func _initialize() -> void:
 	await process_frame
 	WorldLoader.arrival = {}
 
-	# 続きから: 最後に遊んだマップから始まる。はじめから: 始まりの世界から
+	# 着く所に面がない (地形の穴や、範囲の外): 一番近い地面へ寄せる (穴の上に立たない)
+	WorldLoader.arrival = {"path": path_b, "position": Vector3(size.x + 500.0, 5.0, 500.0), "yaw": 0.0, "pitch": 0.0}
+	var scene_hole := _start_world("")
+	for i in 30:
+		await physics_frame
+	var hole_pos: Vector3 = scene_hole.get_node("Player").global_position
+	check(hole_pos.x >= 0.0 and hole_pos.x <= size.x and hole_pos.z <= 0.0 and hole_pos.z >= -size.z, "着く所に面がなければ、一番近い地面へ寄せる (世界の中): %s" % [hole_pos])
+	check(scene_hole.get_node("Player").spawn_position.x >= 0.0 and scene_hole.get_node("Player").spawn_position.x <= size.x, "復帰地点も、地面のある所")
+	scene_hole.queue_free()
+	await process_frame
+
+	# 保存に失敗したら、移らない。書けるようになれば、しばらくしてから移る。最後に遊んだエリアは、行き先
 	SaveGame.directory = DIR + "/saves"
+	SaveGame.allow_headless = true
+	SaveGame.delete()
+	WorldLoader.arrival = {}
+	var scene_s := _start_world(path_a, true)
+	for i in 30:
+		await physics_frame
+	var world_s: Node = scene_s.get_node("World")
+	var player_s: CharacterBody3D = scene_s.get_node("Player")
+	await create_timer(1.7).timeout
+	SaveGame.fail_writes = true
+	player_s.global_position = Vector3(size.x - 1.0, 3.0, -size.z / 2.0)
+	for i in 20:
+		await physics_frame
+	await create_timer(0.6).timeout
+	check(WorldLoader.arrival.is_empty() and not world_s._traveling, "保存に失敗したら、移らない (いまのマップの探索を、失わない)")
+	SaveGame.fail_writes = false
+	await create_timer(3.4).timeout  # もう一度試すまでの時間
+	player_s.global_position = Vector3(size.x - 1.0, 3.0, -size.z / 2.0)
+	for i in 20:
+		await physics_frame
+	await create_timer(0.6).timeout
+	check(WorldLoader.arrival.get("path") == path_b, "書けるようになれば、移る")
+	check(SaveGame.current_area() == "exit-b", "移る時に、最後に遊んだエリアは、行き先になる (着いてから、保存しないまま終わっても、行き先から始まる)")
+	scene_s.queue_free()
+	await process_frame
+	WorldLoader.arrival = {}
+	SaveGame.delete()
+	SaveGame.allow_headless = false
+
+	# 続きから: 最後に遊んだマップから始まる。はじめから: 始まりの世界から
 	SaveGame.allow_headless = true
 	SaveGame.delete()
 	check(SaveGame.current_area() == "", "セーブがなければ、最後に遊んだマップはない")
