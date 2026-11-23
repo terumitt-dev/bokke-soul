@@ -13,6 +13,8 @@ const TERRAIN_COLOR := Color(0.40, 0.38, 0.35)
 
 # タイトル画面で選んだ世界の場所。ゲーム本体へ引き継ぐ (起動時の引数がない時に使う)
 static var selected_path := ""
+# 世界の名前に使える文字 (セーブのファイル名になる。先頭に . は使えない)。tools/pointcloud_to_mesh.py と同じ決まり
+static var WORLD_ID_PATTERN := RegEx.create_from_string("^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}\\z")
 
 
 # 読み込む世界の場所。explicit、起動時の引数、タイトル画面で選んだもの、サンプル、の順に探す
@@ -64,6 +66,31 @@ static func credit_for(path: String) -> Dictionary:
 			if json.data.get(key) is String:
 				result[key] = json.data[key]
 	return result
+
+
+# 世界の測量座標での原点 (データの隣の .json の origin)。ない、または不正な時は null
+static func origin_for(path: String) -> Variant:
+	var sidecar := path.get_basename() + ".json"
+	if not FileAccess.file_exists(sidecar):
+		return null
+	var json := JSON.new()
+	if json.parse(FileAccess.get_file_as_string(sidecar)) != OK or not (json.data is Dictionary):
+		return null
+	return SaveGame.decode_vector(json.data.get("origin"))
+
+
+# 世界の名前 (データの隣の .json の world_id)。ない、または、ファイル名に使えない文字を含む時は空
+static func world_id_for(path: String) -> String:
+	var sidecar := path.get_basename() + ".json"
+	if not FileAccess.file_exists(sidecar):
+		return ""
+	var json := JSON.new()
+	if json.parse(FileAccess.get_file_as_string(sidecar)) != OK or not (json.data is Dictionary):
+		return ""
+	var value: Variant = json.data.get("world_id")
+	if value is String and WORLD_ID_PATTERN.search(value) != null:
+		return value
+	return ""
 
 
 # target に水平方向で一番近い、メッシュの頂点を返す。頂点は面のあるところにしかない

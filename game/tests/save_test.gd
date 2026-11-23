@@ -42,6 +42,7 @@ func _initialize() -> void:
 	_clean()
 	_test_guard()
 	_test_round_trip()
+	_test_named_world()
 	_test_write_failure()
 	_test_broken_and_versions()
 	_test_reveal_png()
@@ -50,6 +51,7 @@ func _initialize() -> void:
 	await _test_failure_notice()
 	await _test_close_with_failed_save()
 	await _test_points_off_keeps_map()
+	await _test_rebuilt_world()
 	await _test_start_bonfire()
 	await _test_title()
 	_clean()
@@ -100,6 +102,42 @@ func _test_round_trip() -> void:
 
 	SaveGame.delete(SAMPLE)
 	check(not SaveGame.exists(SAMPLE), "消せる")
+
+
+# 世界の名前 (.json の world_id) があれば、データの中身が変わっても、セーブの鍵は変わらない
+func _test_named_world() -> void:
+	var dir := TEST_DIR + "/named"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	var world := dir + "/world.glb"
+	var sidecar := dir + "/world.json"
+	var f := FileAccess.open(world, FileAccess.WRITE)
+	f.store_string("中身 1")
+	f.close()
+	f = FileAccess.open(sidecar, FileAccess.WRITE)
+	f.store_string(JSON.stringify({"world_id": "08OF3006-a1b2c3d4"}))
+	f.close()
+
+	check(SaveGame.world_id(world) == "08OF3006-a1b2c3d4", "世界の名前があれば、それが識別子になる")
+	check(SaveGame.write(world, _state()), "名前のある世界を保存できる")
+	f = FileAccess.open(world, FileAccess.WRITE)
+	f.store_string("中身 2 (作り直した)")
+	f.close()
+	check(SaveGame.read(world).status == "ok", "データを作り直しても (中身が変わっても)、名前が同じなら、セーブが続く")
+
+	for bad in ["../evil", ".hidden", "a/b", "", 5, "x".repeat(65), "abc\n"]:
+		f = FileAccess.open(sidecar, FileAccess.WRITE)
+		f.store_string(JSON.stringify({"world_id": bad}))
+		f.close()
+		check(WorldLoader.world_id_for(world).is_empty(), "使えない名前は無視する: %s" % str(bad))
+		check(SaveGame.world_id(world).length() == 16, "使えない名前の時は、中身から決めた識別子に戻る: %s" % str(bad))
+
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(sidecar))
+	check(SaveGame.world_id(world).length() == 16, ".json がなければ、中身から決める (古い世界は今まで通り)")
+	check(SaveGame.read(world).status == "none", "名前が外れたら、別の世界として扱う (名前のあるセーブは使わない)")
+	for file in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(dir + "/" + file))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))
+	_clean()
 
 
 func _test_write_failure() -> void:
@@ -335,6 +373,159 @@ func _test_game() -> void:
 	newer.queue_free()
 	await process_frame
 	SaveGame.delete(SAMPLE)
+
+
+func _write_frame(sidecar: String, origin: Array) -> void:
+	var f := FileAccess.open(sidecar, FileAccess.WRITE)
+	f.store_string(JSON.stringify({"world_id": "frame-test", "origin": origin}))
+	f.close()
+
+
+func _start_world_at(path: String) -> Node:
+	var scene: Node = load("res://scenes/world_local.tscn").instantiate()
+	var settings := GameSettings.new()
+	settings.weather_enabled = false
+	scene.get_node("DayNight").settings = settings
+	scene.get_node("World").world_path = path
+	root.add_child(scene)
+	return scene
+
+
+# 世界を作り直して、原点が動いた時: 標高が動けば、保存した位置も同じだけ動き (地下に出ない)、
+# 水平が動けば、位置を直した上で、ずれて重なる確かめた所の地図は使わない
+func _test_rebuilt_world() -> void:
+	var dir := TEST_DIR + "/frame"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	var world := dir + "/world.glb"
+	var sidecar := dir + "/world.json"
+	var f := FileAccess.open(world, FileAccess.WRITE)
+	f.store_buffer(FileAccess.get_file_as_bytes(SAMPLE))
+	f.close()
+	_write_frame(sidecar, [1000.0, 2000.0, 150.0])
+	SaveGame.delete(world)
+
+	var scene := _start_world_at(world)
+	for i in 40:
+		await physics_frame
+	var player: CharacterBody3D = scene.get_node("Player")
+	var fire: Node3D = load("res://scenes/bonfire.tscn").instantiate()
+	scene.add_child(fire)
+	fire.global_position = player.global_position + Vector3(1.0, 0.0, 0.0)
+	for i in 5:
+		await process_frame
+	player.rest()
+	var point_world: PointWorld = scene.get_node("World").find_children("*", "PointWorld", false, false)[0]
+	var painted: Vector3 = fire.global_position
+	point_world.reveal_at(painted, 4.0)
+	scene.get_node("World").save_now()
+	var saved: Dictionary = SaveGame.read(world).state
+	var spawn: Vector3 = SaveGame.decode_vector(saved.spawn)
+	check(saved.world_id == "frame-test" and SaveGame.decode_vector(saved.origin).is_equal_approx(Vector3(1000, 2000, 150)), "名前のある世界のセーブに、原点が入る")
+	scene.queue_free()
+	await process_frame
+	await process_frame
+
+	# 世界の形 (原点と範囲) が同じなら、そのまま信用する。位置が、(斜面などで) 近くの地面より低く見えても、捨てない
+	var base: Dictionary = saved.duplicate()
+	check(base.get("bounds") is Array and (base.bounds as Array).size() == 6, "セーブに、世界の範囲が入る")
+	var low: Dictionary = base.duplicate()
+	low.spawn = SaveGame.encode_vector(spawn + Vector3(0.0, -10.0, 0.0))
+	SaveGame.write(world, low)
+	var same_frame := _start_world_at(world)
+	for i in 40:
+		await physics_frame
+	var p1: CharacterBody3D = same_frame.get_node("Player")
+	check(p1.has_rested and is_equal_approx(p1.spawn_position.y, spawn.y - 10.0), "世界の形が同じなら、位置を信用する (地面の検査をしない): %s" % [p1.spawn_position])
+	var same_coverage: float = same_frame.get_node("World").find_children("*", "PointWorld", false, false)[0].reveal.coverage()
+	same_frame.queue_free()
+	await process_frame
+	await process_frame
+
+	# 範囲の高さだけが変わった (メッシュを粗くして、地面が上がった。原点は同じ): 作り直しと見なして、位置を確かめる。埋まっていれば使わない
+	var coarse: Dictionary = low.duplicate()
+	var box: Array = (base.bounds as Array).duplicate()
+	box[4] = float(box[4]) + 10.0
+	coarse.bounds = box
+	SaveGame.write(world, coarse)
+	var rebuilt := _start_world_at(world)
+	for i in 40:
+		await physics_frame
+	var p1b: CharacterBody3D = rebuilt.get_node("Player")
+	check(not p1b.has_rested and p1b.spawn_position.y > -5.0, "範囲が変わった世界で、位置が地面の中なら、使わない: %s" % [p1b.spawn_position])
+	rebuilt.queue_free()
+	await process_frame
+	await process_frame
+
+	# 水平の範囲が変わった (切り出しを広げた。原点は同じ): 地図の座標系が変わるので、地図は使わない。位置は地面の上なら使う
+	var wider: Dictionary = base.duplicate()
+	var box2: Array = (base.bounds as Array).duplicate()
+	box2[3] = float(box2[3]) + 50.0
+	wider.bounds = box2
+	SaveGame.write(world, wider)
+	var broad := _start_world_at(world)
+	for i in 40:
+		await physics_frame
+	var p1c: CharacterBody3D = broad.get_node("Player")
+	var wider_coverage: float = broad.get_node("World").find_children("*", "PointWorld", false, false)[0].reveal.coverage()
+	check(p1c.has_rested and wider_coverage < same_coverage - 0.001, "水平の範囲が変わったら、地図は使わない (確かめた割合 %.3f → %.3f)" % [same_coverage, wider_coverage])
+	broad.queue_free()
+	await process_frame
+	await process_frame
+	SaveGame.write(world, base)
+
+	# 標高の原点が 100 m 下がった (地形が、ゲームの中で 100 m 下がる): 保存した位置も 100 m 下がる (空中になり、落ちて着く)
+	_write_frame(sidecar, [1000.0, 2000.0, 50.0])
+	var raised := _start_world_at(world)
+	for i in 40:
+		await physics_frame
+	var p2: CharacterBody3D = raised.get_node("Player")
+	check(is_equal_approx(p2.spawn_position.y, spawn.y + 100.0) and is_equal_approx(p2.spawn_position.x, spawn.x), "標高の原点が動いたら、保存した位置も、同じだけ動く: %s → %s" % [spawn, p2.spawn_position])
+	var pw2: PointWorld = raised.get_node("World").find_children("*", "PointWorld", false, false)[0]
+	var pw2_coverage: float = pw2.reveal.coverage()
+	check(pw2.reveal.sample(painted) > 0.5, "標高だけが動いた時は、確かめた所の地図を、そのまま使う")
+	raised.queue_free()
+	await process_frame
+	await process_frame
+
+	# 水平の原点が動いた (東へ 10 m): 位置を直し、地図は使わない
+	_write_frame(sidecar, [1010.0, 2000.0, 150.0])
+	var shifted := _start_world_at(world)
+	for i in 40:
+		await physics_frame
+	var p3: CharacterBody3D = shifted.get_node("Player")
+	check(is_equal_approx(p3.spawn_position.x, spawn.x - 10.0) and is_equal_approx(p3.spawn_position.z, spawn.z), "水平の原点が動いたら、位置を直す: %s → %s" % [spawn, p3.spawn_position])
+	var pw3: PointWorld = shifted.get_node("World").find_children("*", "PointWorld", false, false)[0]
+	check(pw3.reveal.coverage() < pw2_coverage - 0.001, "水平が動いた時は、ずれて重なる地図を使わない (確かめた割合 %.3f → %.3f)" % [pw2_coverage, pw3.reveal.coverage()])
+	shifted.queue_free()
+	await process_frame
+
+	# 作り直した世界の範囲の外へ出てしまう (切り出しが変わって、保存した篝火が、範囲の外になった):
+	# その位置は使わず、いつもの始まり方にする (使うと、落ちて、同じ位置へ戻ることを繰り返す)
+	_write_frame(sidecar, [5000.0, 2000.0, 150.0])
+	var outside := _start_world_at(world)
+	for i in 40:
+		await physics_frame
+	var p4: CharacterBody3D = outside.get_node("Player")
+	check(not p4.has_rested and p4.spawn_position.distance_to(spawn + Vector3(-4000.0, 0.0, 0.0)) > 1000.0, "範囲の外になる位置は使わず、いつもの始まり方にする: %s" % [p4.spawn_position])
+	check(p4.spawn_position.y > -50.0 and absf(p4.spawn_position.x) < 1000.0, "いつもの始まりの位置は、世界の中にある")
+	outside.queue_free()
+	await process_frame
+
+	# 地面の中になる (標高の原点が 100 m 上がって、地面が、保存した位置より、100 m 上がった): その位置は使わない。
+	# メッシュを粗くした (--voxel を大きくした) 時のように、原点が同じで、地面だけが上がる場合も、同じ判定で防ぐ
+	_write_frame(sidecar, [1000.0, 2000.0, 250.0])
+	var buried := _start_world_at(world)
+	for i in 40:
+		await physics_frame
+	var p5: CharacterBody3D = buried.get_node("Player")
+	check(not p5.has_rested and p5.spawn_position.y > -50.0, "地面の中になる位置は使わず、いつもの始まり方にする: %s" % [p5.spawn_position])
+	buried.queue_free()
+	await process_frame
+
+	for file in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(dir + "/" + file))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))
+	_clean()
 
 
 # 休んで保存に失敗したら、そのことが画面に出て、「基準点を確定しました」に上書きされず、読める時間、残る
