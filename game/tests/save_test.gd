@@ -188,6 +188,11 @@ func _remove_game_file() -> void:
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(SaveGame.path_for()))
 
 
+func _is_v1_file(path: String) -> bool:
+	var json := JSON.new()
+	return json.parse(FileAccess.get_file_as_string(path)) == OK and json.data is Dictionary and int(json.data.get("version", 0)) == 1
+
+
 func _write_legacy(id: String, extra: Dictionary = {}, world: String = "") -> String:
 	var legacy := {"version": 1, "world_id": world if not world.is_empty() else id, "saved_at": "2026-11-22T07:42:00", "has_rested": true, "spawn": [5.0, 6.0, 7.0], "time_total_hours": 8.5, "reveal_png": "AAAA"}
 	legacy.merge(extra, true)
@@ -266,7 +271,14 @@ func _test_legacy_import() -> void:
 	f = FileAccess.open(game_world_dir + "/world.json", FileAccess.WRITE)
 	f.store_string(JSON.stringify({"world_id": "game"}))
 	f.close()
-	_write_legacy("game")
+	var game_file := _write_legacy("game")
+	# 新しい形に直せなかった (ディスクの空きがない時など): 退けず、そのまま残して、次に、もう一度試す
+	SaveGame.fail_writes = true
+	var stuck := SaveGame.read(game_world)
+	var stuck_write := SaveGame.write(game_world, _state())
+	SaveGame.fail_writes = false
+	check(stuck.status == "none" and FileAccess.file_exists(game_file) and not FileAccess.file_exists(game_file + ".bad"), "直せなかった古いセーブ (game.json) は、退けず、そのまま残す")
+	check(not stuck_write and _is_v1_file(game_file), "直せなかった間は、保存もしない (古いセーブを、上書きしない)")
 	var other_world := SaveGame.read(SAMPLE)  # 別の世界を先に読んでも、game.json を壊したり、退けたりしない
 	check(other_world.status == "none" and not FileAccess.file_exists(SaveGame.path_for(SAMPLE) + ".bad"), "世界の名前が game だった古いセーブは、別の世界を読んでも、退けられない")
 	var game_v1 := SaveGame.read(game_world)

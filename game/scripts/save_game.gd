@@ -68,7 +68,9 @@ static func write(world_path: String, state: Dictionary) -> bool:
 		push_warning("新しいバージョンのセーブがあるので、上書きしません: " + path)
 		return false
 
-	_adopt_v1_game_file()
+	if not _adopt_v1_game_file():
+		push_warning("古いセーブ (game.json) を新しい形に直せなかったので、保存しません: " + path)
+		return false
 	var document := _load_document(world_path)
 	var area := state.duplicate()
 	for key: String in GAME_KEYS:
@@ -130,7 +132,8 @@ static func read(world_path: String) -> Dictionary:
 	var result := {"status": "none", "state": {}, "game": {}}
 	if not enabled():
 		return result
-	_adopt_v1_game_file()
+	if not _adopt_v1_game_file():
+		return result  # 直せなかった。壊れたセーブとして退けず、そのまま残して、次に、もう一度試す
 	_import_legacy(world_path)
 	var path := path_for(world_path)
 	if not FileAccess.file_exists(path):
@@ -173,6 +176,8 @@ static func read(world_path: String) -> Dictionary:
 # まだ取り込んでいない古い (バージョン 1) セーブも、取り込まれないようにする (消さずに .v1 にする。消した進行が、よみがえらないように)。
 # 新しいバージョンのセーブは、消さない
 static func delete(world_path: String = "") -> void:
+	if not enabled():
+		return
 	var path := path_for(world_path)
 	if FileAccess.file_exists(path):
 		if _stored_version(path) > VERSION:
@@ -195,22 +200,24 @@ static func _is_legacy_file(path: String) -> bool:
 
 # 世界の名前が "game" だった、バージョン 1 のセーブは、ファイル名が、新しいセーブ (game.json) と同じ。
 # 中身で見分けて (バージョン 1 で、areas がない)、新しい形に直す。元は game.json.v1 として残す
-static func _adopt_v1_game_file() -> void:
+# 直せた (直す必要がなかった) 時は true。直そうとして失敗した時は false (元の game.json は、そのまま残す。呼び出し側は、
+# 読まず、書かず、退けない。次に、もう一度試す)
+static func _adopt_v1_game_file() -> bool:
 	var path := path_for()
 	if not FileAccess.file_exists(path) or not _is_legacy_file(path):
-		return
+		return true
 	var imported := _read_legacy(path, "game")
 	if imported.is_empty():
-		return
+		return true  # バージョン 1 だが、世界の名前が game ではない。取り込めないので、壊れたセーブとして扱われる
 	if DirAccess.copy_absolute(ProjectSettings.globalize_path(path), ProjectSettings.globalize_path(path + ".v1")) != OK:
-		return  # 元を残せないなら、触らない
+		return false  # 元を残せないなら、触らない
 	var document := {"areas": {}}
 	for key: String in GAME_KEYS:
 		if imported.has(key):
 			document[key] = imported[key]
 		imported.erase(key)
 	(document.areas as Dictionary)["game"] = imported
-	_write_document(document)
+	return _write_document(document)
 
 
 # いまの文書を読む (なければ、空の文書)。読めない文書は、退けて、空の文書にする
