@@ -79,7 +79,11 @@ static func origin_for(path: String) -> Variant:
 
 # マップの名前 (.json の name。例: 寒天林道)。ない、文字でない、空白だけの時は空
 static func name_for(path: String) -> String:
-	var value: Variant = read_sidecar(path).get("name")
+	return name_of(read_sidecar(path))
+
+
+static func name_of(data: Dictionary) -> String:
+	var value: Variant = data.get("name")
 	return (value as String).strip_edges() if value is String else ""
 
 
@@ -98,7 +102,11 @@ static func bonfire_for(path: String) -> Variant:
 
 # 世界の名前 (.json の world_id)。ない、または、ファイル名に使えない文字を含む時は空
 static func world_id_for(path: String) -> String:
-	var value: Variant = read_sidecar(path).get("world_id")
+	return world_id_of(read_sidecar(path))
+
+
+static func world_id_of(data: Dictionary) -> String:
+	var value: Variant = data.get("world_id")
 	if value is String and WORLD_ID_PATTERN.search(value) != null:
 		return value
 	return ""

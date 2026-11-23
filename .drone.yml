@@ -90,3 +90,9 @@ steps:
     image: barichello/godot-ci:4.7.2
     commands:
       - sh game/tests/run.sh area_bonfire_test
+
+  # マップの一覧と、隣り合うマップの見つけ方 (測量座標から)、端の判定、座標の直しの動作テスト
+  - name: world-registry-test
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - sh game/tests/run.sh world_registry_test
