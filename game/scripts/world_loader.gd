@@ -13,14 +13,20 @@ const TERRAIN_COLOR := Color(0.40, 0.38, 0.35)
 
 # タイトル画面で選んだ世界の場所。ゲーム本体へ引き継ぐ (起動時の引数がない時に使う)
 static var selected_path := ""
+# 別のマップへ移る時 (出口、続きから) の引き継ぎ。{"path": 行き先の世界の場所, "position": 着く位置 (行き先のゲームの座標),
+# "yaw", "pitch": 視点の向き, "time": 時刻 (通しの時間), "from": 前のマップの名前}。path 以外は、なくてもよい。
+# ゲーム本体 (world_local) が、始まる時に読んで、空にする。起動時の引数 (--world=) より先に使う
+static var arrival := {}
 # 世界の名前に使える文字 (セーブのファイル名になる。先頭に . は使えない)。tools/pointcloud_to_mesh.py と同じ決まり
 static var WORLD_ID_PATTERN := RegEx.create_from_string("^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}\\z")
 
 
-# 読み込む世界の場所。explicit、起動時の引数、タイトル画面で選んだもの、サンプル、の順に探す
+# 読み込む世界の場所。explicit、移動の引き継ぎ (arrival)、起動時の引数、タイトル画面で選んだもの、サンプル、の順に探す
 static func resolve_path(explicit: String = "") -> String:
 	if not explicit.is_empty():
 		return explicit
+	if arrival.get("path") is String and not (arrival.path as String).is_empty():
+		return arrival.path
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with(ARG_PREFIX):
 			return arg.trim_prefix(ARG_PREFIX)

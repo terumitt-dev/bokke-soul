@@ -16,6 +16,7 @@ signal start_requested(world_path: String)
 # テストでは、場面を切り替えずに確かめる
 var auto_change_scene := true
 var resolved_path := ""
+var default_path := ""  # 最後に遊んだマップに、よらない、始まりの世界 (起動時の引数、サンプル)。「はじめから」は、ここから
 var credit := {"credit": "", "license_url": ""}
 var has_save := false
 # 設定。テストで差し替えられる (なければ、設定ファイルから読む)
@@ -39,7 +40,8 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	if settings == null:
 		settings = GameSettings.load_from()
-	resolved_path = WorldLoader.resolve_path(world_path)
+	default_path = WorldLoader.resolve_path(world_path)
+	resolved_path = _resume_path(default_path)
 	_load_background()
 	apply_credit(WorldLoader.credit_for(resolved_path))
 	_refresh_save()
@@ -61,6 +63,19 @@ func _unhandled_input(event: InputEvent) -> void:
 	if credits_panel.visible and event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 		_hide_credits()
 		get_viewport().set_input_as_handled()
+
+
+# 「つづきから」で始める世界。最後に遊んだエリアが、同じ置き場にあれば、そこ。なければ、path のまま
+func _resume_path(path: String) -> String:
+	if not settings.save_enabled or not SaveGame.enabled():
+		return path
+	var id := SaveGame.current_area()
+	if id.is_empty() or id == WorldLoader.world_id_for(path) or id == SaveGame.world_id(path):
+		return path
+	for entry in WorldRegistry.scan(path.get_base_dir()):
+		if entry.world_id == id:
+			return entry.path
+	return path
 
 
 # 世界を背景に置き、カメラを地面の上に立たせる。読み込めなければ、空だけを見せる
@@ -117,7 +132,9 @@ func apply_credit(info: Dictionary) -> void:
 # セーブがあれば、「つづきから」と「はじめから」を出す。なければ「はじめる」だけ。
 # 設定でセーブを切っている時は、ゲームが、復元も保存もしないので、出さない (消せもしない)
 func _refresh_save() -> void:
-	has_save = settings.save_enabled and SaveGame.read(resolved_path).status == "ok"
+	# 続きがあるか: どこかのエリアに、遊んだ記録があれば。表示するマップに記録がなくても (移った先で、保存する前に終わった時)、
+	# 「つづきから」と「はじめから」を出す (進行があるのに、消して始め直せなくならない)
+	has_save = settings.save_enabled and (SaveGame.read(resolved_path).status == "ok" or SaveGame.has_any())
 	start_button.text = "つづきから" if has_save else "はじめる"
 	new_game_button.visible = has_save
 	_new_game_confirming = false
@@ -137,6 +154,7 @@ func _new_game() -> void:
 	_new_game_confirming = false
 	SaveGame.delete(resolved_path)
 	has_save = false
+	resolved_path = default_path  # 「はじめから」は、最後に遊んだマップではなく、始まりの世界から
 	_start()
 
 
@@ -145,6 +163,7 @@ func _start() -> void:
 	if auto_change_scene:
 		# ゲーム本体も同じ世界を読めるように、選んだ場所を引き継ぐ
 		WorldLoader.selected_path = resolved_path
+		WorldLoader.arrival = {"path": resolved_path}  # 起動時の引数 (--world=) より先に、この世界を使う
 		get_tree().change_scene_to_file(GAME_SCENE)
 
 

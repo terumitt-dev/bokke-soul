@@ -79,6 +79,7 @@ static func write(world_path: String, state: Dictionary) -> bool:
 			area.erase(key)
 	var areas: Dictionary = document.areas
 	areas[world_id(world_path)] = area
+	document["current_area"] = world_id(world_path)  # 最後に遊んだエリア。「つづきから」で、そこから始めるため
 	return _write_document(document)
 
 
@@ -175,6 +176,46 @@ static func read(world_path: String) -> Dictionary:
 	return result
 
 
+# どのエリアでも、遊んだ記録が 1 つでもあるか (「はじめから」を出すかの判断。エリアの記録がなくても、最後に遊んだエリアだけが
+# 書かれた状態 (移った先で、保存する前に終わった時) でも、進行は、残っている)
+static func has_any() -> bool:
+	var path := path_for()
+	if not enabled() or not FileAccess.file_exists(path) or _stored_version(path) > VERSION:
+		return false  # 新しいバージョンのセーブは、読まず、消しもしない。ここでは、ないものとして扱う
+	var json := JSON.new()
+	if json.parse(FileAccess.get_file_as_string(path)) != OK or not (json.data is Dictionary):
+		return false
+	var areas: Variant = (json.data as Dictionary).get("areas")
+	return areas is Dictionary and not (areas as Dictionary).is_empty()
+
+
+# 最後に遊んだエリアの世界の名前 (「つづきから」で、そこから始めるため)。セーブがない、使えない、書かれていない時は空
+static func current_area() -> String:
+	var path := path_for()
+	if not enabled() or not FileAccess.file_exists(path):
+		return ""
+	var json := JSON.new()
+	if json.parse(FileAccess.get_file_as_string(path)) != OK or not (json.data is Dictionary):
+		return ""
+	var value: Variant = (json.data as Dictionary).get("current_area")
+	if value is String and WorldLoader.WORLD_ID_PATTERN.search(value) != null:
+		return value
+	return ""
+
+
+# 最後に遊んだエリアを、world_path の世界にする (別のマップへ移る時に、行き先にする)。書けたら true。
+# セーブが無効、まだない、新しいバージョン、のどれかなら、何もせず、true (保存できない時の判断は、呼び出し側)
+static func set_current_area(world_path: String) -> bool:
+	var path := path_for()
+	if not enabled() or not FileAccess.file_exists(path):
+		return true
+	if _stored_version(path) > VERSION:
+		return true
+	var document := _load_document(world_path)
+	document["current_area"] = world_id(world_path)
+	return _write_document(document)
+
+
 # 「はじめから」: セーブを消す (ゲーム全体。どのエリアの記録も、時刻も消える)。
 # まだ取り込んでいない古い (バージョン 1) セーブも、取り込まれないようにする (消さずに .v1 にする。消した進行が、よみがえらないように)。
 # 新しいバージョンのセーブは、消さない
@@ -187,6 +228,8 @@ static func delete(world_path: String = "") -> void:
 			push_warning("新しいバージョンのセーブは、消しません: " + path)
 			return
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	if not DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(directory)):
+		return  # セーブの置き場が、まだない (何も保存したことがない)
 	for file in DirAccess.get_files_at(directory):
 		var legacy := "%s/%s" % [directory, file]
 		if file.ends_with(".json") and legacy != path_for() and _is_legacy_file(legacy):

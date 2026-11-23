@@ -12,6 +12,12 @@ const GROUND_MARGIN := 10.0  # 保存した位置の近くに、地面がある�
 const UNDERGROUND_MARGIN := 2.0  # 保存した位置が、地面より、これ以上深いと、地中と見なす (m)
 const FRAME_TOLERANCE := 0.01  # 世界の形が同じ、と見なす差 (m)
 const SITE_HEIGHT := 0.5  # 篝火の場所と、その真下・真上の地面の、高さの差として許す (m)
+const EXIT_MARGIN := 2.0  # 端から、これ以内に近づくと、隣のマップへ移る (m)
+const ARRIVAL_INSET := 6.0  # 隣のマップに着く時の、端からの距離 (m)。EXIT_MARGIN より大きくして、すぐ戻らないようにする
+const EXIT_COOLDOWN_MS := 1500  # 着いてから、出口が効くまでの時間
+const SAVE_RETRY_MS := 3000  # 保存に失敗して、移るのをやめた時に、もう一度試すまでの時間
+const FADE_SECONDS := 0.4
+const GAME_SCENE := "res://scenes/world_local.tscn"
 const NOTICE_SECONDS := 3.0  # 保存に失敗した知らせを出しておく時間 (休んだ知らせより長い)
 const CLOSE_HOLD_SECONDS := 8.0  # 閉じる時に保存に失敗した時、終了を保留しておく時間
 
@@ -20,6 +26,10 @@ const CLOSE_HOLD_SECONDS := 8.0  # 閉じる時に保存に失敗した時、終
 @export var point_mode := ""
 # セーブを使うか。設定ファイルの [save] enabled と、ヘッドレスでは無効、も合わせて決まる
 @export var save_enabled := true
+# 出口で、実際に場面を切り替えるか。テストでは、切り替えずに、引き継ぎ (WorldLoader.arrival) だけを確かめる
+var auto_change_scene := true
+
+signal traveled(path: String)
 
 @onready var player: CharacterBody3D = get_node("../Player")
 @onready var message: Label = get_node("../HUD/Message")
@@ -32,10 +42,23 @@ var _save_active := false
 # 設定を一時的に切り替えただけで、それまで確かめた所が失われないように
 var _loaded_reveal := ""
 var _close_held := false  # 保存に失敗して、終了を保留している間
+var _path := ""  # 読み込んだ世界の場所
+var _entry := {}  # この世界の、一覧 (WorldRegistry) での情報
+var _exits := {}  # 隣のマップ (方角 → 情報)
+var _arrival := {}  # 前のマップから引き継いだもの (WorldLoader.arrival)
+var _setup_points_position := Vector3.ZERO  # 探索地図を作った時の、プレイヤーの位置 (着く位置で作られたかを、テストで確かめる)
+var _arrived_at := 0  # 着いた時刻 (ミリ秒)
+var _traveling := false
+var _overlay: CanvasLayer
+var _veil: ColorRect
+var _veil_label: Label
 
 
 func _ready() -> void:
-	var loaded := WorldLoader.load_world(WorldLoader.resolve_path(world_path))
+	_path = WorldLoader.resolve_path(world_path)
+	_arrival = WorldLoader.arrival  # 引き継ぎは、ここで受け取って、空にする (次に始める時に、残らないように)
+	WorldLoader.arrival = {}
+	var loaded := WorldLoader.load_world(_path)
 	if loaded.node == null:
 		_fail(loaded.error)
 		return
@@ -55,8 +78,7 @@ func _ready() -> void:
 
 	# マップの篝火 (データの .json の bonfire) があれば、そこへ置いて、そこから始まる。
 	# なければ、世界の中央に一番近い地面の上空から降りて、すぐ前に篝火を置く (中央に穴があっても、地面のある所に降りる)
-	var path := WorldLoader.resolve_path(world_path)
-	var area_fire := _add_area_bonfire(path, meshes)
+	var area_fire := _add_area_bonfire(_path, meshes)
 	if area_fire != null:
 		player.global_position = area_fire.rest_position() + Vector3(0.0, START_HEIGHT, 0.0)
 		player.spawn_position = area_fire.rest_position()
@@ -67,8 +89,147 @@ func _ready() -> void:
 		player.spawn_position = start
 		_add_start_bonfire(meshes, start)
 
+	_place_arrival(meshes)
+	_setup_points_position = player.global_position  # テスト用: 探索地図を作る時の、プレイヤーの位置
 	_points = _add_points(world)
 	_setup_save(meshes)
+	_setup_exits()
+	_finish_arrival()
+
+
+# 出口の準備。同じ置き場の、隣り合うマップを探す。隣がなければ、出口はない
+func _setup_exits() -> void:
+	var entries := WorldRegistry.scan(_path.get_base_dir())
+	var id := WorldLoader.world_id_for(_path)
+	for entry in entries:
+		if entry.world_id == id:
+			_entry = entry
+	if not _entry.is_empty():
+		_exits = WorldRegistry.neighbors(entries, _entry)
+
+
+# 前のマップから移ってきたなら、着く位置を決めて、そこに立たせる (探索地図を作る前に。作る時の位置を、着く位置にするため。
+# 先に、いつもの始まりの位置を使うと、行っていない所が、探索済みになる)。着く位置の地面の高さに合わせる
+# (傾斜のある所で、地面に埋まらない、高く浮きすぎない)。引き継ぎが不正なら、何もしない
+func _place_arrival(meshes: Array) -> void:
+	_arrived_at = Time.get_ticks_msec()
+	if not (_arrival.get("position") is Vector3):
+		_arrival = {}
+		return
+	var position: Vector3 = _arrival.position
+	var ground := position.y - START_HEIGHT  # 前のマップで立っていた高さに、いちばん近い面を選ぶ
+	var heights := WorldLoader.surface_heights(meshes, position.x, position.z)
+	if not heights.is_empty():
+		heights.sort_custom(func(a: float, b: float) -> bool: return absf(a - ground) < absf(b - ground))
+		ground = heights[0]
+		position.y = ground + START_HEIGHT
+	else:
+		# 着く所に面がない (地形の穴)。一番近い地面へ寄せる (穴の上に立つと、落ちて、同じ位置へ戻ることを繰り返す)
+		var nearest := WorldLoader.pick_start(meshes, position)
+		ground = nearest.y
+		position = Vector3(nearest.x, nearest.y + START_HEIGHT, nearest.z)
+	_arrival["landing"] = position
+	_arrival["ground"] = ground
+	player.global_position = position
+	player.velocity = Vector3.ZERO
+	player.pivot.rotation.y = float(_arrival.get("yaw", player.pivot.rotation.y))
+	player.pivot.rotation.x = float(_arrival.get("pitch", player.pivot.rotation.x))
+
+
+# 保存を読んだあとの仕上げ (保存した位置に立たせる処理があるので、そのあと、もう一度、着く位置に立たせる)。
+# 篝火で休んだことがあるマップは、復帰地点は、保存した篝火のまま。まだなら、着いた位置。時刻を引き継ぎ、暗転から戻す
+func _finish_arrival() -> void:
+	if not _arrival.has("landing"):
+		return
+	var landing: Vector3 = _arrival.landing
+	player.global_position = landing
+	player.velocity = Vector3.ZERO
+	if not player.has_rested:
+		player.spawn_position = Vector3(landing.x, float(_arrival.ground) + 0.05, landing.z)
+	if _points != null:
+		_points.reveal_at(landing)  # 保存した地図を戻したあとで、着いた所の周りを、探索済みにする (戻した地図に、着いた所は、ない)
+	if _arrival.has("time"):
+		_apply_time(_arrival.time)
+	if _entry.get("name", "") != "":
+		_notify.call_deferred(_entry.name)  # 着いたマップの名前
+	_ensure_veil()
+	_veil.modulate.a = 1.0
+	_fade(0.0)  # 暗転から、戻す
+
+
+func _physics_process(_delta: float) -> void:
+	if _traveling or _exits.is_empty() or player.rescanning:
+		return
+	if Time.get_ticks_msec() < _arrived_at + EXIT_COOLDOWN_MS:
+		return
+	var direction := WorldRegistry.edge_toward(_entry, player.global_position, EXIT_MARGIN, _exits)
+	if not direction.is_empty():
+		_travel(direction)
+
+
+# 隣のマップへ移る。いまの様子を保存して、暗転して、行き先と、着く位置 (測量座標で同じ場所を、端から少し内側へ) を引き継ぐ
+func _travel(direction: String) -> void:
+	_traveling = true
+	var target: Dictionary = _exits[direction]
+	var position := WorldRegistry.clamp_inside(target, WorldRegistry.convert_position(_entry, target, player.global_position), ARRIVAL_INSET)
+	position.y += START_HEIGHT  # 少し上から降りる (面の高さは、着いてから、床が受ける)
+	# 保存してから移る。最後に遊んだエリアは、行き先にする (着いてから一度も保存しないまま終わっても、行き先から始まる)。
+	# 保存に失敗したら、移らない (いまのマップの探索が、静かに失われないように)。しばらくしてから、もう一度試す
+	if _save_active and not (save_now() and SaveGame.set_current_area(target.path)):
+		_traveling = false
+		_arrived_at = Time.get_ticks_msec() + SAVE_RETRY_MS - EXIT_COOLDOWN_MS
+		return
+	var carried := {
+		"path": target.path,
+		"position": position,
+		"yaw": player.pivot.rotation.y,
+		"pitch": player.pivot.rotation.x,
+		"from": _entry.get("name", ""),
+	}
+	var day_night := get_node_or_null("../DayNight")
+	if day_night != null and day_night.time != null and day_night.settings.time_mode == "accelerated":
+		carried["time"] = day_night.time.total_hours
+	WorldLoader.arrival = carried
+	_ensure_veil()
+	_veil_label.visible = true
+	await _fade(1.0)
+	traveled.emit(target.path)
+	if auto_change_scene and get_tree().change_scene_to_file(GAME_SCENE) != OK:
+		# 場面を切り替えられなかった。暗転を戻して、しばらくしてから、もう一度試す
+		WorldLoader.arrival = {}
+		_traveling = false
+		_arrived_at = Time.get_ticks_msec() + SAVE_RETRY_MS - EXIT_COOLDOWN_MS
+		_veil_label.visible = false
+		_fade(0.0)
+
+
+# 暗転の幕。画面全体を覆う黒と、「読み込み中」の文字
+func _ensure_veil() -> void:
+	if _overlay != null:
+		return
+	_overlay = CanvasLayer.new()
+	_overlay.layer = 100
+	add_child(_overlay)
+	_veil = ColorRect.new()
+	_veil.color = Color.BLACK
+	_veil.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_veil.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_veil.modulate.a = 0.0
+	_overlay.add_child(_veil)
+	_veil_label = Label.new()
+	_veil_label.text = "読み込み中…"
+	_veil_label.set_anchors_preset(Control.PRESET_CENTER)
+	_veil_label.visible = false
+	_veil.add_child(_veil_label)
+
+
+func _fade(alpha: float) -> void:
+	_ensure_veil()
+	var tween := create_tween()
+	tween.tween_property(_veil, "modulate:a", alpha, FADE_SECONDS)
+	await tween.finished
+	if alpha == 0.0:
+		_veil_label.visible = false
 
 
 func _notification(what: int) -> void:
@@ -149,7 +310,7 @@ func _add_points(world: Node3D) -> PointWorld:
 
 # セーブを使う準備。あれば読んで、続きから始める。篝火で休んだら、保存する
 func _setup_save(meshes: Array) -> void:
-	_save_world = WorldLoader.resolve_path(world_path)
+	_save_world = _path
 	_save_active = save_enabled and GameSettings.load_from().save_enabled and SaveGame.enabled()
 	if not _save_active:
 		return
