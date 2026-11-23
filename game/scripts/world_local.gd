@@ -8,6 +8,7 @@ extends Node3D
 
 const START_HEIGHT := 2.0
 const START_BONFIRE_DISTANCE := 2.0  # 最初の篝火を、始めた場所の、どれだけ前に置くか (m)
+const GROUND_MARGIN := 10.0  # 保存した位置の近くに、地面がある、と見なす水平の距離 (m)
 const NOTICE_SECONDS := 3.0  # 保存に失敗した知らせを出しておく時間 (休んだ知らせより長い)
 const CLOSE_HOLD_SECONDS := 8.0  # 閉じる時に保存に失敗した時、終了を保留しておく時間
 
@@ -54,7 +55,7 @@ func _ready() -> void:
 	_add_start_bonfire(meshes, start)
 
 	_points = _add_points(world)
-	_setup_save()
+	_setup_save(meshes)
 
 
 func _notification(what: int) -> void:
@@ -107,7 +108,7 @@ func _add_points(world: Node3D) -> PointWorld:
 
 
 # セーブを使う準備。あれば読んで、続きから始める。篝火で休んだら、保存する
-func _setup_save() -> void:
+func _setup_save(meshes: Array) -> void:
 	_save_world = WorldLoader.resolve_path(world_path)
 	_save_active = save_enabled and GameSettings.load_from().save_enabled and SaveGame.enabled()
 	if not _save_active:
@@ -119,14 +120,16 @@ func _setup_save() -> void:
 		_save_active = false
 		return
 	if result.status == "ok":
-		_apply_save(result.state)
+		_apply_save(result.state, meshes)
 	player.rested.connect(func(_position: Vector3) -> void: save_now())
 
 
 # 読んだセーブを、ゲームへ反映する。項目ごとに検証して、不正なものは、黙って無視する
 # 世界を作り直して、原点が動いていた時は、保存した位置を、新しい原点に合わせて直す (地下や空中に出さない)。
-# 確かめた所の地図は、水平の原点が同じ時だけ使う (動いていたら、ずれて重なるので、使わない)
-func _apply_save(state: Dictionary) -> void:
+# 確かめた所の地図は、水平の原点が同じ時だけ使う (動いていたら、ずれて重なるので、使わない)。
+# 直した位置が、作り直した世界の範囲の外 (地面のない所) になる時は、その位置は使わず、いつもの始まり方にする
+# (使うと、落ちて、同じ位置へ戻ることを繰り返し、遊べなくなる)
+func _apply_save(state: Dictionary, meshes: Array) -> void:
 	var saved_origin: Variant = SaveGame.decode_vector(state.get("origin"))
 	var origin: Variant = WorldLoader.origin_for(_save_world)
 	var shift := Vector3.ZERO
@@ -139,6 +142,8 @@ func _apply_save(state: Dictionary) -> void:
 	if kept is String:
 		_loaded_reveal = kept
 	var spawn: Variant = SaveGame.decode_vector(state.get("spawn"))
+	if spawn != null and shift != Vector3.ZERO and not _has_ground_near(meshes, spawn + shift):
+		spawn = null
 	if spawn != null:
 		spawn += shift
 		player.global_position = spawn
@@ -151,6 +156,12 @@ func _apply_save(state: Dictionary) -> void:
 	var day_night := get_node_or_null("../DayNight")
 	if day_night != null and (saved_time is float or saved_time is int):
 		day_night.restore_total_hours = saved_time  # DayNight は、このあとで始まるので、始まる時に戻される
+
+
+# position の近くに、地面 (メッシュの頂点) があるか。水平の距離で見る
+func _has_ground_near(meshes: Array, position: Vector3) -> bool:
+	var ground := WorldLoader.pick_start(meshes, position)
+	return Vector2(ground.x - position.x, ground.z - position.z).length() <= GROUND_MARGIN
 
 
 # 続きの状態を保存する。保存できたら true

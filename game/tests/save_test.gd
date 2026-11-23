@@ -451,6 +451,18 @@ func _test_rebuilt_world() -> void:
 	shifted.queue_free()
 	await process_frame
 
+	# 作り直した世界の範囲の外へ出てしまう (切り出しが変わって、保存した篝火が、範囲の外になった):
+	# その位置は使わず、いつもの始まり方にする (使うと、落ちて、同じ位置へ戻ることを繰り返す)
+	_write_frame(sidecar, [5000.0, 2000.0, 50.0])
+	var outside := _start_world_at(world)
+	for i in 40:
+		await physics_frame
+	var p4: CharacterBody3D = outside.get_node("Player")
+	check(not p4.has_rested and p4.spawn_position.distance_to(spawn + Vector3(-4000.0, 0.0, 0.0)) > 1000.0, "範囲の外になる位置は使わず、いつもの始まり方にする: %s" % [p4.spawn_position])
+	check(p4.spawn_position.y > -50.0 and absf(p4.spawn_position.x) < 1000.0, "いつもの始まりの位置は、世界の中にある")
+	outside.queue_free()
+	await process_frame
+
 	for file in DirAccess.get_files_at(dir):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(dir + "/" + file))
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))
