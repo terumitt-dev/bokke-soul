@@ -180,8 +180,8 @@ static func read(world_path: String) -> Dictionary:
 # 書かれた状態 (移った先で、保存する前に終わった時) でも、進行は、残っている)
 static func has_any() -> bool:
 	var path := path_for()
-	if not enabled() or not FileAccess.file_exists(path):
-		return false
+	if not enabled() or not FileAccess.file_exists(path) or _stored_version(path) > VERSION:
+		return false  # 新しいバージョンのセーブは、読まず、消しもしない。ここでは、ないものとして扱う
 	var json := JSON.new()
 	if json.parse(FileAccess.get_file_as_string(path)) != OK or not (json.data is Dictionary):
 		return false

@@ -140,6 +140,25 @@ func _initialize() -> void:
 	await process_frame
 	WorldLoader.arrival = {}
 
+	# 探索地図が保存済みのマップへ、移ってくる: 戻した地図に、着いた所は、ない。着いた所の周りを、探索済みにする
+	SaveGame.directory = DIR + "/saves"
+	SaveGame.allow_headless = true
+	SaveGame.delete()
+	var blank := RevealMap.new(box)
+	check(SaveGame.write(path_b, {"has_rested": false, "reveal_png": SaveGame.encode_bytes(blank.to_png())}), "(準備) 何も探索していない地図を、B の記録として保存する")
+	WorldLoader.arrival = {"path": path_b, "position": Vector3(6.0, 5.0, -size.z / 2.0), "yaw": 0.0, "pitch": 0.0}
+	var scene_r := _start_world("", true)
+	for i in 30:
+		await physics_frame
+	var points_r: PointWorld = scene_r.get_node("World").find_children("*", "PointWorld", false, false)[0]
+	var landed: Vector3 = scene_r.get_node("Player").global_position
+	check(points_r.reveal.sample(Vector3(landed.x, 0.0, landed.z)) > 0.5, "保存した地図を戻したあとでも、着いた所の周りは、探索済み (%.2f)" % points_r.reveal.sample(Vector3(landed.x, 0.0, landed.z)))
+	scene_r.queue_free()
+	await process_frame
+	WorldLoader.arrival = {}
+	SaveGame.delete()
+	SaveGame.allow_headless = false
+
 	# 引き継ぎの位置が不正 (Vector3 でない): 無視して、いつも通り始まる
 	WorldLoader.arrival = {"path": path_b, "position": "どこか"}
 	var scene_bad := _start_world("")
@@ -225,6 +244,13 @@ func _initialize() -> void:
 	title2.world_path = path_a
 	root.add_child(title2)
 	await process_frame
+	var newer_file := FileAccess.open(SaveGame.path_for(), FileAccess.WRITE)
+	newer_file.store_string(JSON.stringify({"version": SaveGame.VERSION + 1, "areas": {"x": {}}}))
+	newer_file.close()
+	check(not SaveGame.has_any(), "新しいバージョンのセーブは、「記録がある」とは扱わない (読まず、消しもしない)")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(SaveGame.path_for()))  # 新しいバージョンのセーブは、SaveGame.delete では消えない。直接消す
+	SaveGame.write(path_a, {"has_rested": true})
+	SaveGame.set_current_area(path_b)
 	check(title2.resolved_path == path_b and title2.has_save and title2.new_game_button.visible and title2.start_button.text == "つづきから", "記録のないマップが再開先でも、「つづきから」と「はじめから」が出る (進行を、消して始め直せる)")
 	title2.queue_free()
 	await process_frame

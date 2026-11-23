@@ -146,6 +146,8 @@ func _finish_arrival() -> void:
 	player.velocity = Vector3.ZERO
 	if not player.has_rested:
 		player.spawn_position = Vector3(landing.x, float(_arrival.ground) + 0.05, landing.z)
+	if _points != null:
+		_points.reveal_at(landing)  # 保存した地図を戻したあとで、着いた所の周りを、探索済みにする (戻した地図に、着いた所は、ない)
 	if _arrival.has("time"):
 		_apply_time(_arrival.time)
 	if _entry.get("name", "") != "":
