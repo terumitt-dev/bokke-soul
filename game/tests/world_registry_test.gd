@@ -39,6 +39,10 @@ func _sidecar(id: String, origin: Array, size: Array, name := "") -> Dictionary:
 	return {"world_id": id, "name": name if not name.is_empty() else id, "origin": origin, "size": size}
 
 
+func _entry(id: String, origin: Array, size: Array) -> Dictionary:
+	return {"path": id, "world_id": id, "name": id, "origin": Vector3(origin[0], origin[1], origin[2]), "size": Vector3(size[0], size[1], size[2])}
+
+
 func _by_id(entries: Array[Dictionary], id: String) -> Dictionary:
 	for entry in entries:
 		if entry.world_id == id:
@@ -103,6 +107,64 @@ func _initialize() -> void:
 	check(up.z > -3.0 and up.z < 3.0, "北の端から北のマップへ行くと、北のマップの南の端 (z が 0 の近く) に出る: %s" % [up])
 	var down := WorldRegistry.convert_position(north_entry, center, up)
 	check(down.is_equal_approx(Vector3(200.0, 10.0, -size.z + 1.0)), "戻ると、元の位置 (南北でも、往復で変わらない)")
+
+	# しきい値の境目: 隙間 3.0 m は隣、3.1 m は隣ではない。辺の重なり 10.0 m は隣、9.9 m は隣ではない
+	var base := _entry("base", [0.0, 0.0, 0.0], [100.0, 10.0, 100.0])
+	check(WorldRegistry.neighbors([base, _entry("gap_ok", [103.0, 0.0, 0.0], [100.0, 10.0, 100.0])], base).has("east"), "隙間 3.0 m は、隣")
+	check(WorldRegistry.neighbors([base, _entry("gap_ng", [103.1, 0.0, 0.0], [100.0, 10.0, 100.0])], base).is_empty(), "隙間 3.1 m は、隣ではない")
+	check(WorldRegistry.neighbors([base, _entry("lap_ok", [100.0, 90.0, 0.0], [100.0, 10.0, 100.0])], base).has("east"), "辺の重なり 10.0 m は、隣")
+	check(WorldRegistry.neighbors([base, _entry("lap_ng", [100.0, 90.1, 0.0], [100.0, 10.0, 100.0])], base).is_empty(), "辺の重なり 9.9 m は、隣ではない")
+
+	# 同じ方角に候補が 2 つ: 辺の重なりが大きい方。一覧の順では決まらない
+	var small := _entry("small", [100.0, 70.0, 0.0], [100.0, 10.0, 100.0])  # 重なり 30 m
+	var large := _entry("large", [100.0, 0.0, 0.0], [100.0, 10.0, 100.0])  # 重なり 100 m
+	check(WorldRegistry.neighbors([base, small, large], base).east.world_id == "large" and WorldRegistry.neighbors([base, large, small], base).east.world_id == "large", "同じ方角の候補は、重なりが大きい方 (一覧の順に、よらない)")
+
+	# 端の同点: east、west、north、south の順に、先の方角
+	check(WorldRegistry.edge_toward(center, Vector3(1.0, 5.0, -1.0), 2.0, near) == "west", "角で、同じ距離なら、west (east、west、north、south の順で先)")
+	check(WorldRegistry.edge_toward(center, Vector3(size.x - 1.0, 5.0, -size.z + 1.0), 2.0, near) == "east", "北東の角は、同じ距離なら、east")
+
+	# 南への往復
+	var south_entry := _by_id(entries, "map-south")
+	var below := WorldRegistry.convert_position(center, south_entry, Vector3(200.0, 10.0, -1.0))
+	check(below.z < -295.0 and below.z > -302.0, "南の端から南のマップへ行くと、南のマップの北の端 (z が -奥行きの近く) に出る: %s" % [below])
+	check(WorldRegistry.convert_position(south_entry, center, below).is_equal_approx(Vector3(200.0, 10.0, -1.0)), "南へ行って、戻ると、元の位置")
+
+	# 隙間があるので、直した位置が範囲の外に出る。clamp_inside で、中へ寄せる
+	var outside := WorldRegistry.convert_position(center, east_entry, Vector3(size.x - 1.0, 40.0, -100.0))
+	var inside := WorldRegistry.clamp_inside(east_entry, outside, 6.0)
+	check(outside.x < 0.0 and is_equal_approx(inside.x, 6.0) and is_equal_approx(inside.y, outside.y) and is_equal_approx(inside.z, outside.z), "範囲の外 (x が負) は、端から 6 m の内側へ寄る。高さと、もう一方の向きは変わらない: %s → %s" % [outside, inside])
+	check(WorldRegistry.clamp_inside(east_entry, Vector3(-3.0, 0.0, 4.0), 6.0).z == -6.0 and WorldRegistry.clamp_inside(east_entry, Vector3(50.0, 0.0, -100.0), 6.0) == Vector3(50.0, 0.0, -100.0), "南の端の外 (z が正) も寄る。範囲の中は、そのまま")
+
+	# 不正な .json は、一覧に入らない (壊れている、辞書でない、世界の名前が不正、大きさが負、原点が桁外れ)
+	var bad_dir := DIR + "/bad"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(bad_dir))
+	var good := {"world_id": "good-one", "origin": [1.0, 2.0, 3.0], "size": [100.0, 10.0, 100.0]}
+	_write(bad_dir + "/good.glb", "x")
+	_write(bad_dir + "/good.json", JSON.stringify(good))
+	var bads := {
+		"broken": "これは JSON ではない {{{",
+		"array": "[1, 2, 3]",
+		"bad_id": JSON.stringify(good.merged({"world_id": "../evil"})),
+		"negative_size": JSON.stringify(good.merged({"size": [-100.0, 10.0, 100.0]})),
+		"huge_origin": JSON.stringify(good.merged({"origin": [1.0e12, 2.0, 3.0]})),
+	}
+	for key: String in bads:
+		_write("%s/%s.glb" % [bad_dir, key], "x")
+		_write("%s/%s.json" % [bad_dir, key], bads[key])
+	var scanned := WorldRegistry.scan(bad_dir)
+	check(scanned.size() == 1 and scanned[0].world_id == "good-one", "不正な .json の世界は、一覧に入らない (%s)" % [scanned.map(func(e: Dictionary) -> String: return e.world_id)])
+
+	# 同じ世界の名前が 2 つ: パスの順で先のものだけ
+	_write(bad_dir + "/a_copy.glb", "x")
+	_write(bad_dir + "/a_copy.json", JSON.stringify(good.merged({"name": "先"})))
+	_write(bad_dir + "/z_copy.glb", "x")
+	_write(bad_dir + "/z_copy.json", JSON.stringify(good.merged({"name": "後"})))
+	var deduped := WorldRegistry.scan(bad_dir).filter(func(e: Dictionary) -> bool: return e.world_id == "good-one")
+	check(deduped.size() == 1 and deduped[0].path.ends_with("/a_copy.glb"), "同じ世界の名前が 2 つあれば、パスの順で先のものだけ (後のものは使わない)")
+	for file in DirAccess.get_files_at(bad_dir):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(bad_dir + "/" + file))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(bad_dir))
 
 	for file in DirAccess.get_files_at(DIR):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(DIR + "/" + file))
