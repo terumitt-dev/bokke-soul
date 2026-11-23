@@ -401,7 +401,7 @@ func _test_rebuilt_world() -> void:
 	var f := FileAccess.open(world, FileAccess.WRITE)
 	f.store_buffer(FileAccess.get_file_as_bytes(SAMPLE))
 	f.close()
-	_write_frame(sidecar, [1000.0, 2000.0, 50.0])
+	_write_frame(sidecar, [1000.0, 2000.0, 150.0])
 	SaveGame.delete(world)
 
 	var scene := _start_world_at(world)
@@ -420,18 +420,18 @@ func _test_rebuilt_world() -> void:
 	scene.get_node("World").save_now()
 	var saved: Dictionary = SaveGame.read(world).state
 	var spawn: Vector3 = SaveGame.decode_vector(saved.spawn)
-	check(saved.world_id == "frame-test" and SaveGame.decode_vector(saved.origin).is_equal_approx(Vector3(1000, 2000, 50)), "名前のある世界のセーブに、原点が入る")
+	check(saved.world_id == "frame-test" and SaveGame.decode_vector(saved.origin).is_equal_approx(Vector3(1000, 2000, 150)), "名前のある世界のセーブに、原点が入る")
 	scene.queue_free()
 	await process_frame
 	await process_frame
 
-	# 標高の原点だけが 100 m 下がった (地形が、ゲームの中で 100 m 上がる): 保存した位置も、100 m 上がる
-	_write_frame(sidecar, [1000.0, 2000.0, 150.0])
+	# 標高の原点が 100 m 下がった (地形が、ゲームの中で 100 m 下がる): 保存した位置も 100 m 下がる (空中になり、落ちて着く)
+	_write_frame(sidecar, [1000.0, 2000.0, 50.0])
 	var raised := _start_world_at(world)
 	for i in 40:
 		await physics_frame
 	var p2: CharacterBody3D = raised.get_node("Player")
-	check(is_equal_approx(p2.spawn_position.y, spawn.y - 100.0) and is_equal_approx(p2.spawn_position.x, spawn.x), "標高の原点が動いたら、保存した位置も、同じだけ動く (地下に出ない): %s → %s" % [spawn, p2.spawn_position])
+	check(is_equal_approx(p2.spawn_position.y, spawn.y + 100.0) and is_equal_approx(p2.spawn_position.x, spawn.x), "標高の原点が動いたら、保存した位置も、同じだけ動く: %s → %s" % [spawn, p2.spawn_position])
 	var pw2: PointWorld = raised.get_node("World").find_children("*", "PointWorld", false, false)[0]
 	var pw2_coverage: float = pw2.reveal.coverage()
 	check(pw2.reveal.sample(painted) > 0.5, "標高だけが動いた時は、確かめた所の地図を、そのまま使う")
@@ -440,7 +440,7 @@ func _test_rebuilt_world() -> void:
 	await process_frame
 
 	# 水平の原点が動いた (東へ 10 m): 位置を直し、地図は使わない
-	_write_frame(sidecar, [1010.0, 2000.0, 50.0])
+	_write_frame(sidecar, [1010.0, 2000.0, 150.0])
 	var shifted := _start_world_at(world)
 	for i in 40:
 		await physics_frame
@@ -453,7 +453,7 @@ func _test_rebuilt_world() -> void:
 
 	# 作り直した世界の範囲の外へ出てしまう (切り出しが変わって、保存した篝火が、範囲の外になった):
 	# その位置は使わず、いつもの始まり方にする (使うと、落ちて、同じ位置へ戻ることを繰り返す)
-	_write_frame(sidecar, [5000.0, 2000.0, 50.0])
+	_write_frame(sidecar, [5000.0, 2000.0, 150.0])
 	var outside := _start_world_at(world)
 	for i in 40:
 		await physics_frame
@@ -461,6 +461,17 @@ func _test_rebuilt_world() -> void:
 	check(not p4.has_rested and p4.spawn_position.distance_to(spawn + Vector3(-4000.0, 0.0, 0.0)) > 1000.0, "範囲の外になる位置は使わず、いつもの始まり方にする: %s" % [p4.spawn_position])
 	check(p4.spawn_position.y > -50.0 and absf(p4.spawn_position.x) < 1000.0, "いつもの始まりの位置は、世界の中にある")
 	outside.queue_free()
+	await process_frame
+
+	# 地面の中になる (標高の原点が 100 m 上がって、地面が、保存した位置より、100 m 上がった): その位置は使わない。
+	# メッシュを粗くした (--voxel を大きくした) 時のように、原点が同じで、地面だけが上がる場合も、同じ判定で防ぐ
+	_write_frame(sidecar, [1000.0, 2000.0, 250.0])
+	var buried := _start_world_at(world)
+	for i in 40:
+		await physics_frame
+	var p5: CharacterBody3D = buried.get_node("Player")
+	check(not p5.has_rested and p5.spawn_position.y > -50.0, "地面の中になる位置は使わず、いつもの始まり方にする: %s" % [p5.spawn_position])
+	buried.queue_free()
 	await process_frame
 
 	for file in DirAccess.get_files_at(dir):
