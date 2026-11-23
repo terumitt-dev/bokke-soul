@@ -134,7 +134,14 @@ static func read(world_path: String) -> Dictionary:
 		return result
 	if not _adopt_v1_game_file():
 		return result  # 直せなかった。壊れたセーブとして退けず、そのまま残して、次に、もう一度試す
-	_import_legacy(world_path)
+	var pending := _import_legacy(world_path)
+	if not pending.is_empty():  # 取り込めなかった。古いセーブの中身を、そのまま使う
+		result.status = "ok"
+		result.state = _migrate(pending.merged({"version": VERSION, "world_id": world_id(world_path), "saved_at": ""}))
+		for key: String in GAME_KEYS:
+			if pending.has(key):
+				result.game[key] = pending[key]
+		return result
 	var path := path_for(world_path)
 	if not FileAccess.file_exists(path):
 		return result
@@ -239,10 +246,12 @@ static func _load_document(world_path: String) -> Dictionary:
 
 # バージョン 1 のセーブ (世界ごとに別のファイル) があれば、この世界の記録として取り込む。
 # すでにこの世界の記録があれば、取り込まない (新しい記録を、古いもので上書きしない)
-static func _import_legacy(world_path: String) -> void:
+# 取り込めなかった (書き込みに失敗した) 時は、古いセーブの中身を返す (読む側が、メモリ上で使う。そうしないと、進行を復元せずに始めて、
+# あとで保存が成功した時に、復元していない状態で、古いセーブを置き換えてしまう)。それ以外は、空
+static func _import_legacy(world_path: String) -> Dictionary:
 	var id := world_id(world_path)
 	if _has_area(id) or (FileAccess.file_exists(path_for()) and _stored_version(path_for()) > VERSION):
-		return  # すでに取り込んだ、または、新しいバージョンのセーブがある (上書きしない)
+		return {}  # すでに取り込んだ、または、新しいバージョンのセーブがある (上書きしない)
 	var candidates := [id]
 	var content := content_id(world_path)  # 世界の名前を付ける前の、データの中身から決めた識別子のセーブも探す
 	if content != id:
@@ -254,6 +263,7 @@ static func _import_legacy(world_path: String) -> void:
 		var imported := _read_legacy(legacy, candidate)
 		if imported.is_empty():
 			continue
+		var whole := imported.duplicate()
 		var document := _load_document(world_path)
 		var areas: Dictionary = document.areas
 		for key: String in GAME_KEYS:
@@ -262,9 +272,11 @@ static func _import_legacy(world_path: String) -> void:
 			imported.erase(key)
 		areas[id] = imported
 		if not _write_document(document):
-			return  # 取り込めなかった。元のファイルは、そのままにしておく (次に、もう一度試す)
+			push_warning("古いセーブを取り込めませんでした。元のファイルは、そのまま残します: " + legacy)
+			return whole  # 元のファイルは、そのままにしておく (次に、もう一度試す)
 		DirAccess.rename_absolute(ProjectSettings.globalize_path(legacy), ProjectSettings.globalize_path(legacy + ".v1"))
-		return
+		return {}
+	return {}
 
 
 # セーブに、この世界の記録があるか (ファイルを退けたりはしない。壊れていれば、ない、と答える)

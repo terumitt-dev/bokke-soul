@@ -215,6 +215,21 @@ func _test_legacy_import() -> void:
 	check(FileAccess.file_exists(SaveGame.path_for(SAMPLE)), "取り込むと、新しいセーブのファイルができる")
 	check(SaveGame.read(SAMPLE).status == "ok", "取り込んだあとも、読める (取り込み直さない)")
 
+	# 取り込みの書き込みに失敗した (ディスクの空きがない時など): 元は残し、中身は、メモリ上で使う (進行を、失わない)
+	SaveGame.delete()
+	legacy = _write_legacy(id)
+	SaveGame.fail_writes = true
+	var offline := SaveGame.read(SAMPLE)
+	SaveGame.fail_writes = false
+	check(offline.status == "ok" and SaveGame.decode_vector(offline.state.spawn) == Vector3(5, 6, 7) and is_equal_approx(offline.state.time_total_hours, 8.5), "取り込めなくても、古いセーブの中身を、そのまま使える")
+	check(FileAccess.file_exists(legacy) and not FileAccess.file_exists(SaveGame.path_for(SAMPLE)), "取り込めなかった元のファイルは、そのまま残る")
+	check(SaveGame.write(SAMPLE, offline.state), "そのあと、保存できるようになったら、復元した状態を、保存できる")
+	check(SaveGame.decode_vector(SaveGame.read(SAMPLE).state.spawn) == Vector3(5, 6, 7), "保存した状態は、古いセーブの進行を含む (取り込み直さなくても、失われない)")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(legacy))
+	SaveGame.delete()
+	legacy = _write_legacy(id)
+	SaveGame.read(SAMPLE)  # 次の確認のために、いつも通りに取り込む
+
 	# 「はじめから」のあとに、古いセーブが、よみがえらない
 	SaveGame.delete(SAMPLE)
 	check(SaveGame.read(SAMPLE).status == "none", "「はじめから」のあと、古いセーブは、取り込み直されない")
