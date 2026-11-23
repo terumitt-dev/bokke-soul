@@ -1,6 +1,8 @@
+class_name Bonfire
 extends Node3D
 # 篝火 = 測量基準点。休むと、ここが復帰地点になる
 
+const REST_OFFSET := Vector3(0.0, 0.05, 1.5)  # 復帰する時に立つ位置の、篝火からのずれ (少し手前)
 const FLICKER_SPEED := 9.0
 const DAY_ENERGY := 2.0  # 昼の光の強さ
 const NIGHT_ENERGY := 6.0  # 夜の光の強さ
@@ -35,4 +37,4 @@ func display_name() -> String:
 
 # 復帰する時に立つ位置 (篝火の少し手前)
 func rest_position() -> Vector3:
-	return global_position + Vector3(0.0, 0.05, 1.5)
+	return global_position + REST_OFFSET
