@@ -191,6 +191,18 @@ def add_world_id_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_name_argument(parser: argparse.ArgumentParser) -> None:
+    """マップの名前の指定 (--name) を足す。ゲームは「<名前>の篝火」のように、この名前を使う。"""
+    parser.add_argument("--name", help="マップの名前 (例: 梨本)。ゲームの中で「<名前>の篝火」のように表示される")
+
+
+def apply_name(mesh: trimesh.Trimesh, args: argparse.Namespace) -> None:
+    """--name で渡されたマップの名前を、メッシュの付属情報に入れる。"""
+    name = (getattr(args, "name", None) or "").strip()
+    if name:
+        mesh.metadata["name"] = name
+
+
 def derive_world_id(source: Path, anchor: np.ndarray) -> str:
     """元データの名前 (タイル番号があればそれ) と、元データ全体の南西の角から、世界の名前を決める。
 
@@ -224,6 +236,7 @@ def write_outputs(mesh: trimesh.Trimesh, output: Path) -> None:
         "origin": [float(x) for x in mesh.metadata["origin"]],
         "axes": "GLB の (x, y, z) は、測量座標の (x, z, -y)。戻すには (x, -z, y) に直してから origin を足す",
     }
+    meta["size"] = [float(x) for x in mesh.extents]  # GLB の軸での、幅・高さ・奥行き (m)。隣のマップを見つけるのに使う
     meta.update({k: v for k, v in mesh.metadata.items() if k != "origin"})
     sidecar = output.with_suffix(".json")
     sidecar.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")

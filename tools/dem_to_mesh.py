@@ -13,11 +13,14 @@ from pathlib import Path
 
 import numpy as np
 import trimesh
+from scipy import ndimage
 
 from pointcloud_to_mesh import (
     add_credit_arguments,
+    add_name_argument,
     add_world_id_arguments,
     apply_credit,
+    apply_name,
     apply_world_id,
     to_godot_axes,
     write_outputs,
@@ -68,11 +71,60 @@ def heightfield_mesh(xs: np.ndarray, ys: np.ndarray, z: np.ndarray) -> trimesh.T
     return mesh
 
 
-def convert(xs: np.ndarray, ys: np.ndarray, z: np.ndarray, stride: int = 1) -> trimesh.Trimesh:
-    """格子を stride 個おきに間引いて地形メッシュにし、原点付近へ寄せて Godot の軸にする。"""
+# 篝火を置く場所を探す時の、既定の値 (m)
+BONFIRE_MARGIN = 40.0  # マップの端から、これだけ離す (端は、隣のマップへの出口になる)
+BONFIRE_RADIUS = 6.0  # この半径の中が、平らな場所を選ぶ
+
+
+def find_flat_spot(
+    xs: np.ndarray, ys: np.ndarray, z: np.ndarray, margin: float = BONFIRE_MARGIN, radius: float = BONFIRE_RADIUS
+) -> tuple[float, float, float, float]:
+    """できるだけ平らな場所を探して、(東, 北, 標高, 傾き (度)) を返す。
+
+    場所の周り (radius) の傾きの二乗平均が、いちばん小さい所を選ぶ。端から margin 以内と、
+    周りに標高の欠けがある所は選ばない。同じくらい平らなら、マップの中央に近い方を選ぶ。
+    """
+    dx, dy = float(xs[1] - xs[0]), float(ys[1] - ys[0])
+    extent = min(xs[-1] - xs[0], ys[-1] - ys[0])
+    margin, radius = min(margin, extent * 0.25), min(radius, extent * 0.1)  # 小さなマップ (テストなど) でも、置ける場所を残す
+    gy, gx = np.gradient(z, dy, dx)
+    slope2 = gx**2 + gy**2  # 傾き (tan) の二乗。欠けの周りは NaN
+    valid = np.isfinite(slope2)
+    window = 2 * max(1, round(radius / dx)) + 1
+    full = ndimage.uniform_filter(valid.astype(float), window, mode="constant") > 0.999  # 窓の中に、欠けがない
+    rms = np.sqrt(np.maximum(ndimage.uniform_filter(np.where(valid, slope2, 0.0), window, mode="constant"), 0.0))
+
+    gx_grid, gy_grid = np.meshgrid(xs, ys)
+    inside = (
+        (gx_grid >= xs[0] + margin) & (gx_grid <= xs[-1] - margin) & (gy_grid >= ys[0] + margin) & (gy_grid <= ys[-1] - margin)
+    )
+    allowed = full & inside & valid
+    if not allowed.any():
+        raise ValueError("篝火を置ける場所がありません (端から離れた、欠けのない場所が必要です)")
+    center = np.array([(xs[0] + xs[-1]) / 2, (ys[0] + ys[-1]) / 2])
+    spread = max(xs[-1] - xs[0], ys[-1] - ys[0]) / 2
+    nearness = np.hypot(gx_grid - center[0], gy_grid - center[1]) / spread
+    score = np.where(allowed, rms + 0.01 * nearness, np.inf)  # 同じくらい平らなら、中央に近い方
+    row, col = np.unravel_index(np.argmin(score), score.shape)
+    return float(xs[col]), float(ys[row]), float(z[row, col]), float(np.degrees(np.arctan(rms[row, col])))
+
+
+def convert(
+    xs: np.ndarray,
+    ys: np.ndarray,
+    z: np.ndarray,
+    stride: int = 1,
+    bonfire: tuple[float, float] | None = None,
+    margin: float = BONFIRE_MARGIN,
+) -> trimesh.Trimesh:
+    """格子を stride 個おきに間引いて地形メッシュにし、原点付近へ寄せて Godot の軸にする。
+
+    篝火を置く場所 (測量座標の 東, 北, 標高) も、付属情報に入れる。bonfire (東, 北) があればそこ、なければ、平らな場所を探す。
+    """
     if stride < 1:
         raise ValueError("stride は 1 以上にしてください")
     xs, ys, z = xs[::stride], ys[::stride], z[::stride, ::stride]
+    spot = _bonfire_spot(xs, ys, z, bonfire, margin)
     mesh = heightfield_mesh(xs, ys, z)
     # 測量の座標は値が大きいので、float32 の精度落ちを避けて、最小値を原点にする
     origin = mesh.vertices.min(axis=0)
@@ -81,7 +133,23 @@ def convert(xs: np.ndarray, ys: np.ndarray, z: np.ndarray, stride: int = 1) -> t
     mesh.metadata["origin"] = origin
     mesh.metadata["stride"] = stride
     mesh.metadata["spacing"] = float(xs[1] - xs[0])
+    mesh.metadata["bonfire"] = [spot[0], spot[1], spot[2]]
+    mesh.metadata["bonfire_slope_deg"] = round(spot[3], 2)
     return mesh
+
+
+def _bonfire_spot(
+    xs: np.ndarray, ys: np.ndarray, z: np.ndarray, bonfire: tuple[float, float] | None, margin: float
+) -> tuple[float, float, float, float]:
+    if bonfire is None:
+        return find_flat_spot(xs, ys, z, margin)
+    east, north = bonfire
+    if not (xs[0] <= east <= xs[-1] and ys[0] <= north <= ys[-1]):
+        raise ValueError("篝火の場所が、マップの外です")
+    col, row = int(np.abs(xs - east).argmin()), int(np.abs(ys - north).argmin())
+    if not np.isfinite(z[row, col]):
+        raise ValueError("篝火の場所に、標高がありません")
+    return float(xs[col]), float(ys[row]), float(z[row, col]), float("nan")
 
 
 def main() -> None:
@@ -91,12 +159,16 @@ def main() -> None:
     parser.add_argument("--stride", type=int, default=2, help="格子を何個おきに使うか (大きいほど軽くなる)")
     add_credit_arguments(parser)
     add_world_id_arguments(parser)
+    add_name_argument(parser)
+    parser.add_argument("--bonfire", type=float, nargs=2, metavar=("EAST", "NORTH"), help="篝火を置く場所 (測量座標)。省略すると、平らな場所を探す")
+    parser.add_argument("--bonfire-margin", type=float, default=BONFIRE_MARGIN, help="篝火を置く場所を、端から離す距離 (m)")
     args = parser.parse_args()
 
     xs, ys, z = load_dem(args.input)
     print(f"読み込み: {z.shape[1]} x {z.shape[0]} の格子 (欠け {int(np.isnan(z).sum()):,})")
-    mesh = convert(xs, ys, z, args.stride)
+    mesh = convert(xs, ys, z, args.stride, tuple(args.bonfire) if args.bonfire else None, args.bonfire_margin)
     apply_credit(mesh, args)
+    apply_name(mesh, args)
     apply_world_id(mesh, args, args.input, np.array([xs[0], ys[0]]))  # 間引く前の、格子全体の角
     write_outputs(mesh, args.output)
 
