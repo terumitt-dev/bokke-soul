@@ -126,6 +126,8 @@ func _setup_save(meshes: Array) -> void:
 		return
 	if result.status == "ok":
 		_apply_save(result.state, meshes)
+	else:
+		_apply_time(result.game.get("time_total_hours"))  # 初めて訪れるエリアでも、時刻は続く
 	player.rested.connect(func(_position: Vector3) -> void: save_now())
 
 
@@ -167,10 +169,14 @@ func _apply_save(state: Dictionary, meshes: Array) -> void:
 		player.has_rested = true
 	if _points != null:
 		_points.restore_reveal(SaveGame.decode_bytes(kept))
-	var saved_time: Variant = state.get("time_total_hours")
+	_apply_time(state.get("time_total_hours"))
+
+
+# 保存した時刻 (ゲーム全体のもの) を、昼夜に渡す。DayNight は、このあとで始まるので、始まる時に戻される
+func _apply_time(saved_time: Variant) -> void:
 	var day_night := get_node_or_null("../DayNight")
 	if day_night != null and (saved_time is float or saved_time is int):
-		day_night.restore_total_hours = saved_time  # DayNight は、このあとで始まるので、始まる時に戻される
+		day_night.restore_total_hours = saved_time
 
 
 static func _same_box(a: Vector3, b: Vector3) -> bool:
