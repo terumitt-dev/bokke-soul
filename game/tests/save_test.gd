@@ -43,6 +43,8 @@ func _initialize() -> void:
 	_test_guard()
 	_test_round_trip()
 	_test_named_world()
+	_test_areas()
+	_test_legacy_import()
 	_test_write_failure()
 	_test_broken_and_versions()
 	_test_reveal_png()
@@ -52,6 +54,8 @@ func _initialize() -> void:
 	await _test_close_with_failed_save()
 	await _test_points_off_keeps_map()
 	await _test_rebuilt_world()
+	await _test_time_for_new_area()
+	await _test_unavailable_session()
 	await _test_start_bonfire()
 	await _test_title()
 	_clean()
@@ -75,7 +79,7 @@ func _test_round_trip() -> void:
 	var id_a := SaveGame.world_id(SAMPLE)
 	check(id_a.length() == 16 and id_a == SaveGame.world_id(SAMPLE), "世界の識別子は、データの中身から決まる (同じなら同じ、16 文字)")
 	check(SaveGame.world_id(SAMPLE) != SaveGame.world_id("res://assets/sample_world.glb.import"), "中身が違えば、別の識別子 (データが変わったら、古いセーブは使わない)")
-	check(SaveGame.path_for(SAMPLE).begins_with(TEST_DIR) and SaveGame.path_for(SAMPLE).ends_with("%s.json" % id_a), "セーブは、世界ごとに別のファイル")
+	check(SaveGame.path_for(SAMPLE).begins_with(TEST_DIR) and SaveGame.path_for(SAMPLE).ends_with("/game.json"), "セーブは、ゲームに 1 つのファイル")
 
 	check(SaveGame.read(SAMPLE).status == "none" and not SaveGame.exists(SAMPLE), "セーブがなければ、なしと分かる")
 	check(SaveGame.write(SAMPLE, _state()), "保存できる")
@@ -140,6 +144,201 @@ func _test_named_world() -> void:
 	_clean()
 
 
+# エリアが増えても、セーブは 1 つ。位置などはエリアごと、時刻はゲーム全体
+func _test_areas() -> void:
+	var other := "res://assets/sample_world.glb.import"  # 別の世界として扱う (中身が違うので、識別子も違う)
+	SaveGame.delete()
+	var first := _state(Vector3(1, 0, 0))
+	first.time_total_hours = 10.0
+	var second := _state(Vector3(2, 0, 0))
+	second.time_total_hours = 20.0
+	check(SaveGame.write(SAMPLE, first) and SaveGame.write(other, second), "2 つの世界を、続けて保存できる")
+	check(DirAccess.get_files_at(TEST_DIR).size() == 1, "世界が 2 つでも、セーブのファイルは 1 つ")
+	check(SaveGame.decode_vector(SaveGame.read(SAMPLE).state.spawn) == Vector3(1, 0, 0), "1 つ目の世界の位置は、2 つ目を保存しても、そのまま")
+	check(SaveGame.decode_vector(SaveGame.read(other).state.spawn) == Vector3(2, 0, 0), "2 つ目の世界の位置も、戻る")
+	check(is_equal_approx(SaveGame.read(SAMPLE).state.time_total_hours, 20.0), "時刻は、ゲーム全体で 1 つ (最後に保存した値が、どの世界でも読める)")
+	SaveGame.delete(SAMPLE)
+	check(SaveGame.read(SAMPLE).status == "none" and SaveGame.read(other).status == "none", "「はじめから」は、どの世界の記録も消す")
+
+	# 初めて訪れるエリアでも、ゲーム全体の時刻は続く (記録は、なし)
+	SaveGame.write(SAMPLE, first)
+	var visit := SaveGame.read(other)
+	check(visit.status == "none" and is_equal_approx(visit.game.time_total_hours, 10.0), "初めて訪れるエリアは、記録なし。でも、ゲーム全体の時刻は渡される")
+	SaveGame.delete()
+
+	# 世界の名前が "game" でも、セーブのファイルと取り違えない
+	var dir := TEST_DIR + "/game_named"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	var world := dir + "/world.glb"
+	var f := FileAccess.open(world, FileAccess.WRITE)
+	f.store_string("中身")
+	f.close()
+	f = FileAccess.open(dir + "/world.json", FileAccess.WRITE)
+	f.store_string(JSON.stringify({"world_id": "game"}))
+	f.close()
+	check(SaveGame.write(world, _state()) and SaveGame.read(world).status == "ok", "世界の名前が game でも、保存して読める")
+	check(FileAccess.file_exists(SaveGame.path_for(world)) and not FileAccess.file_exists(SaveGame.path_for(world) + ".v1"), "世界の名前が game でも、セーブのファイルを、取り込み済みの印に変えない")
+	SaveGame.delete()
+	for file in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(dir + "/" + file))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))
+
+
+# 新しいバージョンのセーブは、delete (はじめから) では消えない。テストの後始末は、直接消す
+func _remove_game_file() -> void:
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(SaveGame.path_for()))
+
+
+func _is_v1_file(path: String) -> bool:
+	var json := JSON.new()
+	return json.parse(FileAccess.get_file_as_string(path)) == OK and json.data is Dictionary and int(json.data.get("version", 0)) == 1
+
+
+func _write_legacy(id: String, extra: Dictionary = {}, world: String = "") -> String:
+	var legacy := {"version": 1, "world_id": world if not world.is_empty() else id, "saved_at": "2026-11-22T07:42:00", "has_rested": true, "spawn": [5.0, 6.0, 7.0], "time_total_hours": 8.5, "reveal_png": "AAAA"}
+	legacy.merge(extra, true)
+	var path := "%s/%s.json" % [TEST_DIR, id]
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(JSON.stringify(legacy))
+	f.close()
+	return path
+
+
+# バージョン 1 (世界ごとに別のファイル) のセーブを、自動で取り込む。元は消さずに残す
+func _test_legacy_import() -> void:
+	SaveGame.delete()
+	var id := SaveGame.world_id(SAMPLE)
+	var legacy := _write_legacy(id)
+	var result := SaveGame.read(SAMPLE)
+	check(result.status == "ok" and SaveGame.decode_vector(result.state.spawn) == Vector3(5, 6, 7), "古い (バージョン 1) セーブを、読める")
+	check(is_equal_approx(result.state.time_total_hours, 8.5) and result.state.reveal_png == "AAAA" and result.state.version == SaveGame.VERSION, "古いセーブの時刻や地図も、取り込まれる (バージョンは新しいもの)")
+	check(not FileAccess.file_exists(legacy) and FileAccess.file_exists(legacy + ".v1"), "取り込んだ元のファイルは、消さずに .v1 として残る")
+	check(FileAccess.file_exists(SaveGame.path_for(SAMPLE)), "取り込むと、新しいセーブのファイルができる")
+	check(SaveGame.read(SAMPLE).status == "ok", "取り込んだあとも、読める (取り込み直さない)")
+
+	# 取り込みの書き込みに失敗した (ディスクの空きがない時など): 「使えない」と返し、元は、そのまま残す。次に、もう一度試せる
+	SaveGame.delete()
+	legacy = _write_legacy(id)
+	SaveGame.fail_writes = true
+	var offline := SaveGame.read(SAMPLE)
+	SaveGame.fail_writes = false
+	check(offline.status == "unavailable" and offline.state.is_empty(), "取り込めなかった時は、「使えない」と返す (復元しないまま、始めさせない)")
+	check(FileAccess.file_exists(legacy) and not FileAccess.file_exists(SaveGame.path_for(SAMPLE)), "取り込めなかった元のファイルは、そのまま残る")
+	var retry := SaveGame.read(SAMPLE)
+	check(retry.status == "ok" and SaveGame.decode_vector(retry.state.spawn) == Vector3(5, 6, 7) and FileAccess.file_exists(legacy + ".v1"), "書き込めるようになったら、次の読み込みで、取り込める")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(legacy + ".v1"))
+	SaveGame.delete()
+	legacy = _write_legacy(id)
+	SaveGame.read(SAMPLE)  # 次の確認のために、いつも通りに取り込む
+
+	# 「はじめから」のあとに、古いセーブが、よみがえらない
+	SaveGame.delete(SAMPLE)
+	check(SaveGame.read(SAMPLE).status == "none", "「はじめから」のあと、古いセーブは、取り込み直されない")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(legacy + ".v1"))
+
+	# すでに新しい記録があれば、古いもので上書きしない
+	SaveGame.write(SAMPLE, _state(Vector3(9, 9, 9)))
+	legacy = _write_legacy(id)
+	check(SaveGame.decode_vector(SaveGame.read(SAMPLE).state.spawn) == Vector3(9, 9, 9), "新しい記録がある世界は、古いセーブで上書きしない")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(legacy))
+	SaveGame.delete()
+
+	# 使えない古いセーブ (中の識別子が合わない、バージョンが違う) は、取り込まず、そのまま置く
+	var bad_world := _write_legacy(id, {}, "0000000000000000")
+	var bad_version := FileAccess.get_file_as_string(bad_world)
+	check(SaveGame.read(SAMPLE).status == "none" and FileAccess.get_file_as_string(bad_world) == bad_version, "識別子が合わない古いセーブは、取り込まず、そのまま置く")
+	var odd_version := _write_legacy(id, {"version": 7})
+	check(SaveGame.read(SAMPLE).status == "none" and FileAccess.file_exists(odd_version), "バージョンが違う古いセーブは、取り込まず、そのまま置く")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(odd_version))
+
+	# 新しいバージョンのセーブがある時は、古いセーブを取り込まない (新しいセーブを壊さない)
+	var game := SaveGame.path_for(SAMPLE)
+	var f := FileAccess.open(game, FileAccess.WRITE)
+	f.store_string(JSON.stringify({"version": SaveGame.VERSION + 1, "areas": {}}))
+	f.close()
+	var future := FileAccess.get_file_as_string(game)
+	var legacy2 := _write_legacy(id)
+	check(SaveGame.read(SAMPLE).status == "newer" and FileAccess.get_file_as_string(game) == future and FileAccess.file_exists(legacy2), "新しいバージョンのセーブがあれば、古いセーブを取り込まず、どちらも残す")
+	SaveGame.delete(SAMPLE)
+	check(FileAccess.get_file_as_string(game) == future and FileAccess.file_exists(legacy2), "「はじめから」でも、新しいバージョンのセーブは、消さない (古いセーブも、そのまま)")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(legacy2))
+	_remove_game_file()
+
+	# 取り込む時、すでにゲーム全体の時刻があれば、それを優先する (古い時刻に、巻き戻さない)
+	SaveGame.delete()
+	var elsewhere := _state()
+	elsewhere.time_total_hours = 40.0
+	SaveGame.write("res://assets/sample_world.glb.import", elsewhere)
+	var timed := _write_legacy(id)
+	check(is_equal_approx(SaveGame.read(SAMPLE).state.time_total_hours, 40.0), "古いセーブを取り込んでも、すでにあるゲーム全体の時刻を使う (巻き戻さない)")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(timed + ".v1"))
+	SaveGame.delete()
+
+	# 「はじめから」: まだ取り込んでいない古いセーブ (別の世界のものも、同じ世界の 2 つ目の候補も) も、取り込まれなくなる (消さずに .v1)
+	var spare := _write_legacy("1111111111111111")
+	var twin := _write_legacy(SaveGame.content_id(SAMPLE) if SaveGame.world_id(SAMPLE) != SaveGame.content_id(SAMPLE) else "2222222222222222")
+	var mine := _write_legacy(id)
+	SaveGame.read(SAMPLE)  # 自分のものを取り込む
+	SaveGame.delete(SAMPLE)
+	check(SaveGame.read(SAMPLE).status == "none" and not FileAccess.file_exists(SaveGame.path_for(SAMPLE)), "「はじめから」のあと、取り込み済みでない古いセーブも、よみがえらない")
+	check(FileAccess.file_exists(spare + ".v1") and not FileAccess.file_exists(spare), "取り込んでいない古いセーブは、消さずに .v1 になる (ほかの世界のものも)")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(spare + ".v1"))
+	for leftover: String in [twin, twin + ".v1", mine + ".v1"]:
+		if FileAccess.file_exists(leftover):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(leftover))
+
+	# 世界の名前が game だった、バージョン 1 のセーブ (ファイル名が、新しいセーブと同じ game.json) も、取り込む
+	var game_world_dir := TEST_DIR + "/game_v1"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(game_world_dir))
+	var game_world := game_world_dir + "/world.glb"
+	f = FileAccess.open(game_world, FileAccess.WRITE)
+	f.store_string("中身")
+	f.close()
+	f = FileAccess.open(game_world_dir + "/world.json", FileAccess.WRITE)
+	f.store_string(JSON.stringify({"world_id": "game"}))
+	f.close()
+	var game_file := _write_legacy("game")
+	# 新しい形に直せなかった (ディスクの空きがない時など): 退けず、そのまま残して、次に、もう一度試す
+	SaveGame.fail_writes = true
+	var stuck := SaveGame.read(game_world)
+	var stuck_write := SaveGame.write(game_world, _state())
+	SaveGame.fail_writes = false
+	check(stuck.status == "unavailable", "直せなかった時は、「使えない」と返す")
+	check(FileAccess.file_exists(game_file) and not FileAccess.file_exists(game_file + ".bad"), "直せなかった古いセーブ (game.json) は、退けず、そのまま残す")
+	SaveGame.fail_writes = true
+	check(SaveGame.read(SAMPLE).status == "unavailable" and FileAccess.file_exists(game_file), "別の世界を読んでも、直せない game.json は、そのまま残る")
+	SaveGame.fail_writes = false
+	check(not stuck_write and _is_v1_file(game_file), "直せなかった間は、保存もしない (古いセーブを、上書きしない)")
+	var other_world := SaveGame.read(SAMPLE)  # 別の世界を先に読んでも、game.json を壊したり、退けたりしない
+	check(other_world.status == "none" and not FileAccess.file_exists(SaveGame.path_for(SAMPLE) + ".bad"), "世界の名前が game だった古いセーブは、別の世界を読んでも、退けられない")
+	var game_v1 := SaveGame.read(game_world)
+	check(game_v1.status == "ok" and SaveGame.decode_vector(game_v1.state.spawn) == Vector3(5, 6, 7) and FileAccess.file_exists(SaveGame.path_for(SAMPLE) + ".v1"), "世界の名前が game だった古いセーブも、取り込まれる (元は game.json.v1 に残る)")
+	SaveGame.delete()
+	for leftover: String in [SaveGame.path_for(SAMPLE) + ".v1", game_world_dir + "/world.glb", game_world_dir + "/world.json"]:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(leftover))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(game_world_dir))
+
+	# 世界の名前を付ける前 (中身から決めた識別子) のセーブも、名前のある世界の記録として取り込む
+	var dir := TEST_DIR + "/renamed"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	var world := dir + "/world.glb"
+	f = FileAccess.open(world, FileAccess.WRITE)
+	f.store_string("中身")
+	f.close()
+	f = FileAccess.open(dir + "/world.json", FileAccess.WRITE)
+	f.store_string(JSON.stringify({"world_id": "renamed-test"}))
+	f.close()
+	var content := SaveGame.content_id(world)
+	var legacy3 := _write_legacy(content)
+	var renamed := SaveGame.read(world)
+	check(renamed.status == "ok" and renamed.state.world_id == "renamed-test" and FileAccess.file_exists(legacy3 + ".v1"), "名前を付ける前の (中身から決めた識別子の) セーブも、名前のある世界の記録として取り込む")
+	for file in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(dir + "/" + file))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))
+	for file in DirAccess.get_files_at(TEST_DIR):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(TEST_DIR + "/" + file))
+
+
 func _test_write_failure() -> void:
 	# 保存先に作れない (途中の名前が、フォルダではなくファイル) と、書けずに、false を返す。止まらない
 	var blocker := TEST_DIR + "/blocker"
@@ -193,12 +392,11 @@ func _test_broken_and_versions() -> void:
 
 	# 識別子が合わない (別の世界のセーブを、ファイル名だけ変えて置いた)
 	SaveGame.write(SAMPLE, _state())
-	var text := FileAccess.get_file_as_string(path).replace(SaveGame.world_id(SAMPLE), "0000000000000000")
+	var text := FileAccess.get_file_as_string(path).replace(SaveGame.world_id(SAMPLE), "0000000000000000")  # 別の世界の記録に見せる
 	file = FileAccess.open(path, FileAccess.WRITE)
 	file.store_string(text)
 	file.close()
-	check(SaveGame.read(SAMPLE).status == "invalid", "世界の識別子が合わないセーブは、使わない")
-	DirAccess.remove_absolute(ProjectSettings.globalize_path(path + ".bad"))
+	check(SaveGame.read(SAMPLE).status == "none" and FileAccess.file_exists(path) and not FileAccess.file_exists(path + ".bad"), "別の世界の記録だけがあるセーブは、この世界の記録なしとして扱う (退けない)")
 
 	# 新しいバージョンのセーブ: 読まず、上書きもしない (古いゲームで開いて、壊さないため)
 	file = FileAccess.open(path, FileAccess.WRITE)
@@ -209,7 +407,7 @@ func _test_broken_and_versions() -> void:
 	check(result.status == "newer" and result.state.is_empty(), "新しいバージョンのセーブは、「新しい」と返して、中身は使わない")
 	check(not SaveGame.write(SAMPLE, _state()), "新しいバージョンのセーブは、上書きしない (保存を断る)")
 	check(FileAccess.get_file_as_string(path) == before and not FileAccess.file_exists(path + ".bad"), "新しいバージョンのセーブは、そのまま残る (壊したり、退けたりしない)")
-	SaveGame.delete(SAMPLE)
+	_remove_game_file()
 
 
 func _test_reveal_png() -> void:
@@ -372,7 +570,50 @@ func _test_game() -> void:
 	check(p4.has_rested and not newer.get_node("World").find_children("*", "PointWorld", false, false).is_empty(), "新しいバージョンのセーブでも、ゲームは普通に遊べる")
 	newer.queue_free()
 	await process_frame
-	SaveGame.delete(SAMPLE)
+	_remove_game_file()
+
+
+# 初めて訪れるエリアでも、ゲーム全体の時刻から始まる (別のエリアで進めた時刻が、巻き戻らない)
+func _test_time_for_new_area() -> void:
+	SaveGame.delete()
+	var state := _state()
+	state.time_total_hours = 40.0
+	SaveGame.write("res://assets/sample_world.glb.import", state)  # 別のエリアの記録と、ゲーム全体の時刻
+	var scene := _start_world()
+	for i in 20:
+		await physics_frame
+	var time: TimeOfDay = scene.get_node("DayNight").time
+	check(time.total_hours >= 40.0, "初めて訪れるエリアでも、時刻は続く (%.2f 時間)" % time.total_hours)
+	check(not scene.get_node("Player").has_rested, "記録のないエリアは、いつもの始まり方")
+	scene.queue_free()
+	await process_frame
+	SaveGame.delete()
+
+
+# 古いセーブを取り込めない (書き込みに失敗する) 時は、そのあいだ、保存しない。復元しないまま保存して、古い進行を置き換えないため
+func _test_unavailable_session() -> void:
+	SaveGame.delete()
+	var legacy := _write_legacy(SaveGame.world_id(SAMPLE))
+	SaveGame.fail_writes = true
+	var scene := _start_world()
+	for i in 30:
+		await physics_frame
+	SaveGame.fail_writes = false  # そのあと、書き込めるようになっても、このあいだは、保存しない
+	var player: CharacterBody3D = scene.get_node("Player")
+	var fire: Node3D = load("res://scenes/bonfire.tscn").instantiate()
+	scene.add_child(fire)
+	fire.global_position = player.global_position + Vector3(1.0, 0.0, 0.0)
+	for i in 5:
+		await process_frame
+	player.rest()
+	scene.get_node("World").save_now()
+	check(not FileAccess.file_exists(SaveGame.path_for(SAMPLE)) and FileAccess.file_exists(legacy), "古いセーブを取り込めなかった間は、休んでも、閉じても、保存しない (古いセーブは、そのまま残る)")
+	check(player.has_rested == true and not player.spawn_position.is_equal_approx(Vector3(5, 6, 7)), "復元せずに、いつも通り遊べる")
+	scene.queue_free()
+	await process_frame
+	await process_frame
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(legacy))
+	SaveGame.delete()
 
 
 func _write_frame(sidecar: String, origin: Array) -> void:
