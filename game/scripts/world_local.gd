@@ -10,6 +10,7 @@ const START_HEIGHT := 2.0
 const START_BONFIRE_DISTANCE := 2.0  # 最初の篝火を、始めた場所の、どれだけ前に置くか (m)
 const GROUND_MARGIN := 10.0  # 保存した位置の近くに、地面がある、と見なす水平の距離 (m)
 const UNDERGROUND_MARGIN := 2.0  # 保存した位置が、地面より、これ以上深いと、地中と見なす (m)
+const FRAME_TOLERANCE := 0.01  # 世界の形が同じ、と見なす差 (m)
 const NOTICE_SECONDS := 3.0  # 保存に失敗した知らせを出しておく時間 (休んだ知らせより長い)
 const CLOSE_HOLD_SECONDS := 8.0  # 閉じる時に保存に失敗した時、終了を保留しておく時間
 
@@ -23,6 +24,7 @@ const CLOSE_HOLD_SECONDS := 8.0  # 閉じる時に保存に失敗した時、終
 @onready var message: Label = get_node("../HUD/Message")
 
 var _points: PointWorld
+var _bounds := AABB()  # 読み込んだ世界の範囲 (セーブに入れて、世界が作り直されたかを知るのに使う)
 var _save_world := ""  # セーブの対象の世界の場所
 var _save_active := false
 # セーブから読んだ、確かめた所の地図 (PNG)。点の表現が無効な間も、保存に引き継ぐ。
@@ -47,6 +49,8 @@ func _ready() -> void:
 		mesh.create_trimesh_collision()
 		var box := mesh.global_transform * mesh.get_aabb()
 		bounds = box if i == 0 else bounds.merge(box)
+
+	_bounds = bounds
 
 	# 世界の中央に一番近い地面の上空から降りる (中央に穴があっても、地面のある所に降りる)
 	var start := WorldLoader.pick_start(meshes, bounds.get_center())
@@ -125,25 +129,35 @@ func _setup_save(meshes: Array) -> void:
 	player.rested.connect(func(_position: Vector3) -> void: save_now())
 
 
-# 読んだセーブを、ゲームへ反映する。項目ごとに検証して、不正なものは、黙って無視する
-# 世界を作り直して、原点が動いていた時は、保存した位置を、新しい原点に合わせて直す (地下や空中に出さない)。
-# 確かめた所の地図は、水平の原点が同じ時だけ使う (動いていたら、ずれて重なるので、使わない)。
-# 保存した位置が、作り直した世界で、地面のない所 (範囲の外) や、地面の中 (メッシュを粗くして、地面が上がった時など) になる時は、
-# その位置は使わず、いつもの始まり方にする (使うと、落ちて、同じ位置へ戻ることを繰り返し、遊べなくなる)
+# 読んだセーブを、ゲームへ反映する。項目ごとに検証して、不正なものは、黙って無視する。
+#
+# セーブには、保存した時の世界の形 (測量座標の原点と、メッシュの範囲) も入っている。いまの世界と見比べて、
+#   - 同じなら、そのまま信用する (地面の検査はしない。斜面の途中の篝火を、誤って捨てないため)
+#   - 違えば、作り直された世界。位置は、原点の動きだけ直した上で、地面の上にあるか確かめ、
+#     地面のない所 (範囲の外) や、地面の中 (メッシュを粗くして、地面が上がった時など) なら、使わず、いつもの始まり方にする
+#     (使うと、落ちて、同じ位置へ戻ることを繰り返し、遊べなくなる)
+#   - 確かめた所の地図は、水平の原点と、水平の範囲が同じ時だけ使う (違うと、ずれて重なる。範囲で、画素の間隔も変わる)
 func _apply_save(state: Dictionary, meshes: Array) -> void:
 	var saved_origin: Variant = SaveGame.decode_vector(state.get("origin"))
 	var origin: Variant = WorldLoader.origin_for(_save_world)
+	var saved_bounds: Variant = _decode_bounds(state.get("bounds"))
 	var shift := Vector3.ZERO
 	var same_map := true
 	if saved_origin != null and origin != null:
 		var moved: Vector3 = saved_origin - origin  # 測量座標 (東, 北, 標高) での、原点の動き
 		shift = Vector3(moved.x, moved.z, -moved.y)  # ゲームの座標 (x, 高さ, z) に直す
 		same_map = is_zero_approx(moved.x) and is_zero_approx(moved.y)
+	var unchanged := shift == Vector3.ZERO
+	if saved_bounds != null:
+		var old: AABB = saved_bounds
+		unchanged = unchanged and _same_box(old.position, _bounds.position) and _same_box(old.size, _bounds.size)
+		same_map = same_map and Vector2(old.position.x - _bounds.position.x, old.position.z - _bounds.position.z).length() < FRAME_TOLERANCE \
+			and Vector2(old.size.x - _bounds.size.x, old.size.z - _bounds.size.z).length() < FRAME_TOLERANCE
 	var kept: Variant = state.get("reveal_png") if same_map else null
 	if kept is String:
 		_loaded_reveal = kept
 	var spawn: Variant = SaveGame.decode_vector(state.get("spawn"))
-	if spawn != null and not _is_on_ground(meshes, spawn + shift):
+	if spawn != null and not unchanged and not _is_on_ground(meshes, spawn + shift):
 		spawn = null
 	if spawn != null:
 		spawn += shift
@@ -157,6 +171,25 @@ func _apply_save(state: Dictionary, meshes: Array) -> void:
 	var day_night := get_node_or_null("../DayNight")
 	if day_night != null and (saved_time is float or saved_time is int):
 		day_night.restore_total_hours = saved_time  # DayNight は、このあとで始まるので、始まる時に戻される
+
+
+static func _same_box(a: Vector3, b: Vector3) -> bool:
+	return a.distance_to(b) < FRAME_TOLERANCE
+
+
+# 範囲を、[x, y, z, 幅, 高さ, 奥行き] の 6 つの数で保存する。読めなければ null
+static func _decode_bounds(value: Variant) -> Variant:
+	if not (value is Array) or (value as Array).size() != 6:
+		return null
+	var position: Variant = SaveGame.decode_vector((value as Array).slice(0, 3))
+	var size: Variant = SaveGame.decode_vector((value as Array).slice(3, 6))
+	if position == null or size == null:
+		return null
+	return AABB(position, size)
+
+
+static func _encode_bounds(box: AABB) -> Array:
+	return SaveGame.encode_vector(box.position) + SaveGame.encode_vector(box.size)
 
 
 # position が、地面の上 (または、空中) にあるか。一番近い地面 (メッシュの頂点) が、水平に離れすぎている、
@@ -175,6 +208,7 @@ func save_now() -> bool:
 	var origin: Variant = WorldLoader.origin_for(_save_world)
 	if origin != null:
 		state["origin"] = SaveGame.encode_vector(origin)  # 位置は、この原点からの値。世界を作り直したら、直すのに使う
+	state["bounds"] = _encode_bounds(_bounds)  # 世界の形。いまの世界と見比べて、作り直されたかを知る
 	if player.has_rested:
 		state["spawn"] = SaveGame.encode_vector(player.spawn_position)
 	var day_night := get_node_or_null("../DayNight")

@@ -425,6 +425,54 @@ func _test_rebuilt_world() -> void:
 	await process_frame
 	await process_frame
 
+	# 世界の形 (原点と範囲) が同じなら、そのまま信用する。位置が、(斜面などで) 近くの地面より低く見えても、捨てない
+	var base: Dictionary = saved.duplicate()
+	check(base.get("bounds") is Array and (base.bounds as Array).size() == 6, "セーブに、世界の範囲が入る")
+	var low: Dictionary = base.duplicate()
+	low.spawn = SaveGame.encode_vector(spawn + Vector3(0.0, -10.0, 0.0))
+	SaveGame.write(world, low)
+	var same_frame := _start_world_at(world)
+	for i in 40:
+		await physics_frame
+	var p1: CharacterBody3D = same_frame.get_node("Player")
+	check(p1.has_rested and is_equal_approx(p1.spawn_position.y, spawn.y - 10.0), "世界の形が同じなら、位置を信用する (地面の検査をしない): %s" % [p1.spawn_position])
+	var same_coverage: float = same_frame.get_node("World").find_children("*", "PointWorld", false, false)[0].reveal.coverage()
+	same_frame.queue_free()
+	await process_frame
+	await process_frame
+
+	# 範囲の高さだけが変わった (メッシュを粗くして、地面が上がった。原点は同じ): 作り直しと見なして、位置を確かめる。埋まっていれば使わない
+	var coarse: Dictionary = low.duplicate()
+	var box: Array = (base.bounds as Array).duplicate()
+	box[4] = float(box[4]) + 10.0
+	coarse.bounds = box
+	SaveGame.write(world, coarse)
+	var rebuilt := _start_world_at(world)
+	for i in 40:
+		await physics_frame
+	var p1b: CharacterBody3D = rebuilt.get_node("Player")
+	check(not p1b.has_rested and p1b.spawn_position.y > -5.0, "範囲が変わった世界で、位置が地面の中なら、使わない: %s" % [p1b.spawn_position])
+	rebuilt.queue_free()
+	await process_frame
+	await process_frame
+
+	# 水平の範囲が変わった (切り出しを広げた。原点は同じ): 地図の座標系が変わるので、地図は使わない。位置は地面の上なら使う
+	var wider: Dictionary = base.duplicate()
+	var box2: Array = (base.bounds as Array).duplicate()
+	box2[3] = float(box2[3]) + 50.0
+	wider.bounds = box2
+	SaveGame.write(world, wider)
+	var broad := _start_world_at(world)
+	for i in 40:
+		await physics_frame
+	var p1c: CharacterBody3D = broad.get_node("Player")
+	var wider_coverage: float = broad.get_node("World").find_children("*", "PointWorld", false, false)[0].reveal.coverage()
+	check(p1c.has_rested and wider_coverage < same_coverage - 0.001, "水平の範囲が変わったら、地図は使わない (確かめた割合 %.3f → %.3f)" % [same_coverage, wider_coverage])
+	broad.queue_free()
+	await process_frame
+	await process_frame
+	SaveGame.write(world, base)
+
 	# 標高の原点が 100 m 下がった (地形が、ゲームの中で 100 m 下がる): 保存した位置も 100 m 下がる (空中になり、落ちて着く)
 	_write_frame(sidecar, [1000.0, 2000.0, 50.0])
 	var raised := _start_world_at(world)
