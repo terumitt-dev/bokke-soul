@@ -1,15 +1,23 @@
 class_name SaveGame
 extends RefCounted
-# セーブ。世界ごとに別のファイル (JSON) に、ゲームの続きの状態を保存する。
+# セーブ。ゲームに 1 つのファイル (JSON) に、ゲームの続きの状態を保存する。中には、エリア (世界) ごとの記録が入る。
 #
+#   {"version": 2, "saved_at": ..., "time_total_hours": ..., "areas": {"<世界の識別子>": {位置、確かめた所、…}}}
+#
+#   - 時刻は、ゲーム全体のもの。位置や確かめた所は、エリアごとのもの。エリアが増えても、セーブは 1 つのまま
 #   - バージョン付き。あとから項目を足しても、古いセーブを読めるようにする (_migrate)
 #   - 世界の識別子は、データの隣の .json の world_id。なければ、世界のデータ (GLB) の中身から決める
+#   - バージョン 1 (世界ごとに別のファイル <識別子>.json) のセーブは、その世界を読む時に、自動で取り込む。
+#     取り込んだ元のファイルは、消さずに <識別子>.json.v1 として残す (取り込み直さないため。いつでも見直せる)
 #   - 書き込みは、一時ファイルへ書いてから付け替える (途中で落ちても、セーブが壊れない)
 #   - 壊れたセーブは、止まらず退ける。消さずに .bad として残す
 #   - 新しいバージョンのセーブ (新しいゲームで作ったもの) は、読まず、上書きもしない
 #   - ヘッドレス (テスト、CI) では、既定で無効。誰かの本物のセーブを、テストが書き換えないように
 
-const VERSION := 1
+const VERSION := 2
+const FILE_NAME := "game.json"
+const LEGACY_VERSION := 1  # 世界ごとに別のファイルだった頃のバージョン
+const GAME_KEYS := ["time_total_hours"]  # エリアに属さない (ゲーム全体の) 項目
 const MAX_COORDINATE := 1.0e7  # 位置として受け付ける大きさ (m)
 
 # 保存先。テストは、専用の場所に変える
@@ -30,21 +38,27 @@ static func world_id(world_path: String) -> String:
 	var named := WorldLoader.world_id_for(world_path)
 	if not named.is_empty():
 		return named
+	return content_id(world_path)
+
+
+# 世界のデータ (GLB) の中身から決めた識別子 (16 文字)。データがなければ、場所の文字から決める
+static func content_id(world_path: String) -> String:
 	var hash := FileAccess.get_sha256(world_path)
 	if hash.is_empty():
 		hash = world_path.sha256_text()
 	return hash.substr(0, 16)
 
 
-static func path_for(world_path: String) -> String:
-	return "%s/%s.json" % [directory, world_id(world_path)]
+# セーブのファイル (ゲームに 1 つ)。world_path は、どの世界でも同じ場所を指す (呼び出しを変えずに済むよう、受け取る)
+static func path_for(_world_path: String = "") -> String:
+	return "%s/%s" % [directory, FILE_NAME]
 
 
 static func exists(world_path: String) -> bool:
 	return enabled() and FileAccess.file_exists(path_for(world_path))
 
 
-# 保存する。state に、version、world_id、saved_at を足して書く。
+# その世界 (エリア) の記録を保存する。state は、位置などの項目。ゲーム全体の項目 (時刻) も、ここで一緒に渡す。
 # 新しいバージョンのセーブが、すでにあれば、上書きせず false を返す
 static func write(world_path: String, state: Dictionary) -> bool:
 	if not enabled():
@@ -54,10 +68,23 @@ static func write(world_path: String, state: Dictionary) -> bool:
 		push_warning("新しいバージョンのセーブがあるので、上書きしません: " + path)
 		return false
 
+	var document := _load_document(world_path)
+	var area := state.duplicate()
+	for key: String in GAME_KEYS:
+		if area.has(key):
+			document[key] = area[key]
+			area.erase(key)
+	var areas: Dictionary = document.areas
+	areas[world_id(world_path)] = area
+	return _write_document(document)
+
+
+# 文書 (ゲーム全体) を、ファイルへ書く。一時ファイルへ書いてから、付け替える
+static func _write_document(document: Dictionary) -> bool:
+	var path := path_for()
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(directory))
-	var full := state.duplicate()
+	var full := document.duplicate()
 	full["version"] = VERSION
-	full["world_id"] = world_id(world_path)
 	full["saved_at"] = Time.get_datetime_string_from_system(true)
 
 	# 一時ファイルへ書いてから、付け替える。書いている途中で落ちても、いまのセーブは壊れない。
@@ -95,36 +122,125 @@ static func _store(path: String, text: String) -> bool:
 
 
 # 読む。{"status": ..., "state": ...}。status は次のどれか:
-#   none: セーブがない / ok: 読めた / invalid: 壊れている (退けた) / newer: 新しいバージョンのセーブ (使わない)
+#   none: セーブがない、または、この世界の記録がない / ok: 読めた / invalid: 壊れている (退けた) / newer: 新しいバージョンのセーブ (使わない)
+# state は、その世界の記録に、ゲーム全体の項目 (時刻)、version、world_id、saved_at を足したもの
 static func read(world_path: String) -> Dictionary:
 	var result := {"status": "none", "state": {}}
-	if not exists(world_path):
+	if not enabled():
 		return result
+	_import_legacy(world_path)
 	var path := path_for(world_path)
+	if not FileAccess.file_exists(path):
+		return result
 
 	var json := JSON.new()
 	if json.parse(FileAccess.get_file_as_string(path)) != OK or not (json.data is Dictionary):
 		return _reject(path, result)
-	var state: Dictionary = json.data
+	var document: Dictionary = json.data
 
-	var version: Variant = state.get("version")
+	var version: Variant = document.get("version")
 	if not _is_version(version):
 		return _reject(path, result)
 	if int(version) > VERSION:
 		result.status = "newer"
 		return result
-	if state.get("world_id") != world_id(world_path):
+	if not (document.get("areas") is Dictionary):
 		return _reject(path, result)
 
+	var area: Variant = (document.areas as Dictionary).get(world_id(world_path))
+	if not (area is Dictionary):
+		return result  # このセーブに、この世界の記録はない (別の世界を遊んだ記録だけがある)
+
+	var state: Dictionary = (area as Dictionary).duplicate()
+	for key: String in GAME_KEYS:
+		if document.has(key):
+			state[key] = document[key]
+	state["version"] = version
+	state["world_id"] = world_id(world_path)
+	state["saved_at"] = document.get("saved_at", "")
 	result.status = "ok"
 	result.state = _migrate(state)
 	return result
 
 
-static func delete(world_path: String) -> void:
+# 「はじめから」: セーブを消す (ゲーム全体。どのエリアの記録も、時刻も消える)
+static func delete(world_path: String = "") -> void:
 	var path := path_for(world_path)
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+
+# いまの文書を読む (なければ、空の文書)。読めない文書は、退けて、空の文書にする
+static func _load_document(world_path: String) -> Dictionary:
+	var empty := {"areas": {}}
+	var path := path_for(world_path)
+	if not FileAccess.file_exists(path):
+		return empty
+	var json := JSON.new()
+	if json.parse(FileAccess.get_file_as_string(path)) != OK or not (json.data is Dictionary):
+		_reject(path, {})
+		return empty
+	var document: Dictionary = json.data
+	if not _is_version(document.get("version")) or not (document.get("areas") is Dictionary):
+		_reject(path, {})
+		return empty
+	return document
+
+
+# バージョン 1 のセーブ (世界ごとに別のファイル) があれば、この世界の記録として取り込む。
+# すでにこの世界の記録があれば、取り込まない (新しい記録を、古いもので上書きしない)
+static func _import_legacy(world_path: String) -> void:
+	var id := world_id(world_path)
+	if _has_area(id) or (FileAccess.file_exists(path_for()) and _stored_version(path_for()) > VERSION):
+		return  # すでに取り込んだ、または、新しいバージョンのセーブがある (上書きしない)
+	var candidates := [id]
+	var content := content_id(world_path)  # 世界の名前を付ける前の、データの中身から決めた識別子のセーブも探す
+	if content != id:
+		candidates.append(content)
+	for candidate: String in candidates:
+		var legacy := "%s/%s.json" % [directory, candidate]
+		if legacy == path_for() or not FileAccess.file_exists(legacy):  # 世界の名前が "game" でも、新しいセーブと取り違えない
+			continue
+		var imported := _read_legacy(legacy, candidate)
+		if imported.is_empty():
+			continue
+		var document := _load_document(world_path)
+		var areas: Dictionary = document.areas
+		for key: String in GAME_KEYS:
+			if imported.has(key) and not document.has(key):
+				document[key] = imported[key]
+			imported.erase(key)
+		areas[id] = imported
+		if not _write_document(document):
+			return  # 取り込めなかった。元のファイルは、そのままにしておく (次に、もう一度試す)
+		DirAccess.rename_absolute(ProjectSettings.globalize_path(legacy), ProjectSettings.globalize_path(legacy + ".v1"))
+		return
+
+
+# セーブに、この世界の記録があるか (ファイルを退けたりはしない。壊れていれば、ない、と答える)
+static func _has_area(id: String) -> bool:
+	var path := path_for()
+	if not FileAccess.file_exists(path):
+		return false
+	var json := JSON.new()
+	if json.parse(FileAccess.get_file_as_string(path)) != OK or not (json.data is Dictionary):
+		return false
+	var areas: Variant = (json.data as Dictionary).get("areas")
+	return areas is Dictionary and (areas as Dictionary).get(id) is Dictionary
+
+
+# バージョン 1 のセーブを読む。使える時は、項目の辞書 (version、world_id、saved_at は除く)。使えなければ、空
+static func _read_legacy(path: String, id: String) -> Dictionary:
+	var json := JSON.new()
+	if json.parse(FileAccess.get_file_as_string(path)) != OK or not (json.data is Dictionary):
+		return {}
+	var state: Dictionary = json.data
+	if not _is_version(state.get("version")) or int(state.version) != LEGACY_VERSION or state.get("world_id") != id:
+		return {}
+	var result := state.duplicate()
+	for key: String in ["version", "world_id", "saved_at"]:
+		result.erase(key)
+	return result
 
 
 # 位置 (Vector3) を、保存できる形 (配列) にする
