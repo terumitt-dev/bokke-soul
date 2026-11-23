@@ -140,20 +140,23 @@ func _initialize() -> void:
 	var bad_dir := DIR + "/bad"
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(bad_dir))
 	var good := {"world_id": "good-one", "origin": [1.0, 2.0, 3.0], "size": [100.0, 10.0, 100.0]}
-	_write(bad_dir + "/good.glb", "x")
-	_write(bad_dir + "/good.json", JSON.stringify(good))
 	var bads := {
 		"broken": "これは JSON ではない {{{",
 		"array": "[1, 2, 3]",
-		"bad_id": JSON.stringify(good.merged({"world_id": "../evil"})),
-		"negative_size": JSON.stringify(good.merged({"size": [-100.0, 10.0, 100.0]})),
-		"huge_origin": JSON.stringify(good.merged({"origin": [1.0e12, 2.0, 3.0]})),
+		"bad_id": JSON.stringify(good.merged({"world_id": "../evil"}, true)),
+		"negative_size": JSON.stringify(good.merged({"size": [-100.0, 10.0, 100.0]}, true)),
+		"huge_origin": JSON.stringify(good.merged({"origin": [1.0e12, 2.0, 3.0]}, true)),
 	}
 	for key: String in bads:
 		_write("%s/%s.glb" % [bad_dir, key], "x")
 		_write("%s/%s.json" % [bad_dir, key], bads[key])
+	# 不正なものだけを置いた状態で、1 つも入らないこと (正常なものと同じ名前で、重複として落ちたのではないことも、これで分かる)
+	var rejected := WorldRegistry.scan(bad_dir)
+	check(rejected.is_empty(), "不正な .json (壊れている、辞書でない、名前・大きさ・原点が不正) の世界は、1 つも一覧に入らない (%s)" % [rejected.map(func(e: Dictionary) -> String: return e.world_id)])
+	_write(bad_dir + "/good.glb", "x")
+	_write(bad_dir + "/good.json", JSON.stringify(good))
 	var scanned := WorldRegistry.scan(bad_dir)
-	check(scanned.size() == 1 and scanned[0].world_id == "good-one", "不正な .json の世界は、一覧に入らない (%s)" % [scanned.map(func(e: Dictionary) -> String: return e.world_id)])
+	check(scanned.size() == 1 and scanned[0].world_id == "good-one", "正常な世界は、入る (%s)" % [scanned.map(func(e: Dictionary) -> String: return e.world_id)])
 
 	# 同じ世界の名前が 2 つ: パスの順で先のものだけ
 	_write(bad_dir + "/a_copy.glb", "x")
