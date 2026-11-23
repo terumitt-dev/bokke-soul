@@ -9,6 +9,7 @@
 """
 
 import argparse
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -86,12 +87,15 @@ def find_flat_spot(
     """
     dx, dy = float(xs[1] - xs[0]), float(ys[1] - ys[0])
     extent = min(xs[-1] - xs[0], ys[-1] - ys[0])
-    margin, radius = min(margin, extent * 0.25), min(radius, extent * 0.1)  # 小さなマップ (テストなど) でも、置ける場所を残す
+    small = min(margin, extent * 0.25), min(radius, extent * 0.1)  # 小さなマップでも、置ける場所を残す
+    if small != (margin, radius):
+        warnings.warn(f"マップが小さいので、篝火の端からの距離を {small[0]:.1f} m、平らさを見る半径を {small[1]:.1f} m に縮めました")
+    margin, radius = small
     gy, gx = np.gradient(z, dy, dx)
     slope2 = gx**2 + gy**2  # 傾き (tan) の二乗。欠けの周りは NaN
     valid = np.isfinite(slope2)
     window = 2 * max(1, round(radius / dx)) + 1
-    full = ndimage.uniform_filter(valid.astype(float), window, mode="constant") > 0.999  # 窓の中に、欠けがない
+    full = ndimage.uniform_filter(valid.astype(float), window, mode="constant") > 1 - 1e-6  # 窓の中に、欠けがない
     rms = np.sqrt(np.maximum(ndimage.uniform_filter(np.where(valid, slope2, 0.0), window, mode="constant"), 0.0))
 
     gx_grid, gy_grid = np.meshgrid(xs, ys)
@@ -123,8 +127,9 @@ def convert(
     """
     if stride < 1:
         raise ValueError("stride は 1 以上にしてください")
-    xs, ys, z = xs[::stride], ys[::stride], z[::stride, ::stride]
+    # 篝火の場所は、間引く前の格子で決める (間引きの細かさを変えても、同じ場所になる)
     spot = _bonfire_spot(xs, ys, z, bonfire, margin)
+    xs, ys, z = xs[::stride], ys[::stride], z[::stride, ::stride]
     mesh = heightfield_mesh(xs, ys, z)
     # 測量の座標は値が大きいので、float32 の精度落ちを避けて、最小値を原点にする
     origin = mesh.vertices.min(axis=0)
@@ -134,7 +139,8 @@ def convert(
     mesh.metadata["stride"] = stride
     mesh.metadata["spacing"] = float(xs[1] - xs[0])
     mesh.metadata["bonfire"] = [spot[0], spot[1], spot[2]]
-    mesh.metadata["bonfire_slope_deg"] = round(spot[3], 2)
+    if np.isfinite(spot[3]):  # 場所を手で決めた時は、傾きは求めない
+        mesh.metadata["bonfire_slope_deg"] = round(spot[3], 2)
     return mesh
 
 
@@ -161,6 +167,7 @@ def main() -> None:
     add_world_id_arguments(parser)
     add_name_argument(parser)
     parser.add_argument("--bonfire", type=float, nargs=2, metavar=("EAST", "NORTH"), help="篝火を置く場所 (測量座標)。省略すると、平らな場所を探す")
+    parser.add_argument("--crs", help="座標系 (例: EPSG:6676)。.json に書く。別の座標系のデータを混ぜた時に、気づくため")
     parser.add_argument("--bonfire-margin", type=float, default=BONFIRE_MARGIN, help="篝火を置く場所を、端から離す距離 (m)")
     args = parser.parse_args()
 
@@ -169,6 +176,8 @@ def main() -> None:
     mesh = convert(xs, ys, z, args.stride, tuple(args.bonfire) if args.bonfire else None, args.bonfire_margin)
     apply_credit(mesh, args)
     apply_name(mesh, args)
+    if args.crs:
+        mesh.metadata["crs"] = args.crs
     apply_world_id(mesh, args, args.input, np.array([xs[0], ys[0]]))  # 間引く前の、格子全体の角
     write_outputs(mesh, args.output)
 

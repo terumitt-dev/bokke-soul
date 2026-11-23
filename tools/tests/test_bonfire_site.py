@@ -15,7 +15,8 @@ def terrain(plateau=(60.0, 40.0), edge_plateau=None):
     z = 100.0 + 0.3 * gx + 0.2 * gy  # 全体が、斜面
     for e, n in [plateau] + ([edge_plateau] if edge_plateau else []):
         near = np.hypot(gx - e, gy - n) < 15
-        z[near] = z[near].mean() if near.any() else z[near]
+        if near.any():
+            z[near] = z[near].mean()
     return xs, ys, z
 
 
@@ -79,8 +80,41 @@ def test_no_name_means_no_key(tmp_path):
 
 
 def test_same_bonfire_whatever_the_stride():
-    # 間引きを変えても、篝火は、ほぼ同じ場所 (作り直しで、動かない)
+    # 間引きを変えても、篝火は、同じ場所 (間引く前の格子で決めるので、作り直しで動かない)
     xs, ys, z = terrain()
-    a = d2m.convert(xs, ys, z, stride=1).metadata["bonfire"]
-    b = d2m.convert(xs, ys, z, stride=2).metadata["bonfire"]
-    assert np.hypot(a[0] - b[0], a[1] - b[1]) < 10
+    places = {tuple(d2m.convert(xs, ys, z, stride=n).metadata["bonfire"]) for n in (1, 2, 3)}
+    assert len(places) == 1
+
+
+def test_manual_bonfire_writes_valid_json(tmp_path):
+    # 手で決めた時、傾きは求めない。.json に NaN (正式な JSON ではない) が出ない
+    xs, ys, z = terrain()
+    mesh = d2m.convert(xs, ys, z, bonfire=(120.0, 90.0))
+    output = tmp_path / "world.glb"
+    p2m.write_outputs(mesh, output)
+    text = output.with_suffix(".json").read_text(encoding="utf-8")
+    assert "NaN" not in text
+    meta = json.loads(text, parse_constant=lambda name: pytest.fail(f"{name} が入っている"))
+    assert "bonfire_slope_deg" not in meta and meta["bonfire"][:2] == [120.0, 90.0]
+
+
+def test_no_place_for_a_bonfire_is_an_error():
+    xs, ys, z = terrain()
+    z[:] = np.nan  # 全面が欠け
+    with pytest.raises(ValueError, match="置ける場所がありません"):
+        d2m.find_flat_spot(xs, ys, z)
+
+
+def test_ties_choose_the_center():
+    # 全面が同じ傾きの平面なら、中央に近い所を選ぶ
+    xs, ys = np.arange(0, 201, 1.0), np.arange(0, 151, 1.0)
+    gx, gy = np.meshgrid(xs, ys)
+    east, north, _, _ = d2m.find_flat_spot(xs, ys, 100.0 + 0.1 * gx)
+    assert abs(east - 100.0) <= 2 and abs(north - 75.0) <= 2
+
+
+def test_shrinking_the_margin_on_a_small_map_warns():
+    xs, ys = np.arange(0, 101, 1.0), np.arange(0, 101, 1.0)
+    gx, gy = np.meshgrid(xs, ys)
+    with pytest.warns(UserWarning, match="縮めました"):
+        d2m.find_flat_spot(xs, ys, 100.0 + 0.1 * gx, margin=40.0)

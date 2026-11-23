@@ -239,7 +239,8 @@ def write_outputs(mesh: trimesh.Trimesh, output: Path) -> None:
     meta["size"] = [float(x) for x in mesh.extents]  # GLB の軸での、幅・高さ・奥行き (m)。隣のマップを見つけるのに使う
     meta.update({k: v for k, v in mesh.metadata.items() if k != "origin"})
     sidecar = output.with_suffix(".json")
-    sidecar.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    # NaN は、正式な JSON ではない (Godot が読めない恐れがある)。混ざったら、書かずに落とす
+    sidecar.write_text(json.dumps(meta, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
     print(f"書き出し: {output} (頂点 {len(mesh.vertices):,} / 面 {len(mesh.faces):,})")
     print(f"元の原点: {meta['origin']} (同じ場所に {sidecar.name} として保存)")
 

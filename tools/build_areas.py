@@ -47,6 +47,8 @@ def build(raw_root: Path, out_dir: Path, stride: int, manifest: dict | None = No
         mesh = convert(xs, ys, z, stride)
         apply_credit(mesh, Namespace(credit=manifest["credit"], license_url=manifest["license_url"]))
         apply_name(mesh, Namespace(name=area["name"]))
+        if manifest.get("crs"):
+            mesh.metadata["crs"] = manifest["crs"]
         apply_world_id(mesh, Namespace(world_id=None), source, np.array([xs[0], ys[0]]))
         output = out_dir / f"{area['tile']}.glb"
         write_outputs(mesh, output)
