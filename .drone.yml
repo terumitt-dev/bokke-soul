@@ -96,3 +96,9 @@ steps:
     image: barichello/godot-ci:4.7.2
     commands:
       - sh game/tests/run.sh world_registry_test
+
+  # マップの端の出口 (隣のマップへ移る、着いた位置、暗転、続きから) の動作テスト
+  - name: map-exit-test
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - sh game/tests/run.sh map_exit_test

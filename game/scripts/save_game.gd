@@ -79,6 +79,7 @@ static func write(world_path: String, state: Dictionary) -> bool:
 			area.erase(key)
 	var areas: Dictionary = document.areas
 	areas[world_id(world_path)] = area
+	document["current_area"] = world_id(world_path)  # 最後に遊んだエリア。「つづきから」で、そこから始めるため
 	return _write_document(document)
 
 
@@ -175,6 +176,20 @@ static func read(world_path: String) -> Dictionary:
 	return result
 
 
+# 最後に遊んだエリアの世界の名前 (「つづきから」で、そこから始めるため)。セーブがない、使えない、書かれていない時は空
+static func current_area() -> String:
+	var path := path_for()
+	if not enabled() or not FileAccess.file_exists(path):
+		return ""
+	var json := JSON.new()
+	if json.parse(FileAccess.get_file_as_string(path)) != OK or not (json.data is Dictionary):
+		return ""
+	var value: Variant = (json.data as Dictionary).get("current_area")
+	if value is String and WorldLoader.WORLD_ID_PATTERN.search(value) != null:
+		return value
+	return ""
+
+
 # 「はじめから」: セーブを消す (ゲーム全体。どのエリアの記録も、時刻も消える)。
 # まだ取り込んでいない古い (バージョン 1) セーブも、取り込まれないようにする (消さずに .v1 にする。消した進行が、よみがえらないように)。
 # 新しいバージョンのセーブは、消さない
@@ -187,6 +202,8 @@ static func delete(world_path: String = "") -> void:
 			push_warning("新しいバージョンのセーブは、消しません: " + path)
 			return
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	if not DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(directory)):
+		return  # セーブの置き場が、まだない (何も保存したことがない)
 	for file in DirAccess.get_files_at(directory):
 		var legacy := "%s/%s" % [directory, file]
 		if file.ends_with(".json") and legacy != path_for() and _is_legacy_file(legacy):
