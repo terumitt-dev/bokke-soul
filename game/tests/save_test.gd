@@ -42,6 +42,7 @@ func _initialize() -> void:
 	_clean()
 	_test_guard()
 	_test_round_trip()
+	_test_named_world()
 	_test_write_failure()
 	_test_broken_and_versions()
 	_test_reveal_png()
@@ -100,6 +101,42 @@ func _test_round_trip() -> void:
 
 	SaveGame.delete(SAMPLE)
 	check(not SaveGame.exists(SAMPLE), "消せる")
+
+
+# 世界の名前 (.json の world_id) があれば、データの中身が変わっても、セーブの鍵は変わらない
+func _test_named_world() -> void:
+	var dir := TEST_DIR + "/named"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	var world := dir + "/world.glb"
+	var sidecar := dir + "/world.json"
+	var f := FileAccess.open(world, FileAccess.WRITE)
+	f.store_string("中身 1")
+	f.close()
+	f = FileAccess.open(sidecar, FileAccess.WRITE)
+	f.store_string(JSON.stringify({"world_id": "08OF3006-a1b2c3d4"}))
+	f.close()
+
+	check(SaveGame.world_id(world) == "08OF3006-a1b2c3d4", "世界の名前があれば、それが識別子になる")
+	check(SaveGame.write(world, _state()), "名前のある世界を保存できる")
+	f = FileAccess.open(world, FileAccess.WRITE)
+	f.store_string("中身 2 (作り直した)")
+	f.close()
+	check(SaveGame.read(world).status == "ok", "データを作り直しても (中身が変わっても)、名前が同じなら、セーブが続く")
+
+	for bad in ["../evil", ".hidden", "a/b", "", 5, "x".repeat(65)]:
+		f = FileAccess.open(sidecar, FileAccess.WRITE)
+		f.store_string(JSON.stringify({"world_id": bad}))
+		f.close()
+		check(WorldLoader.world_id_for(world).is_empty(), "使えない名前は無視する: %s" % str(bad))
+		check(SaveGame.world_id(world).length() == 16, "使えない名前の時は、中身から決めた識別子に戻る: %s" % str(bad))
+
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(sidecar))
+	check(SaveGame.world_id(world).length() == 16, ".json がなければ、中身から決める (古い世界は今まで通り)")
+	check(SaveGame.read(world).status == "none", "名前が外れたら、別の世界として扱う (名前のあるセーブは使わない)")
+	for file in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(dir + "/" + file))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))
+	_clean()
 
 
 func _test_write_failure() -> void:

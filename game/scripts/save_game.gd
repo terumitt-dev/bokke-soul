@@ -3,7 +3,7 @@ extends RefCounted
 # セーブ。世界ごとに別のファイル (JSON) に、ゲームの続きの状態を保存する。
 #
 #   - バージョン付き。あとから項目を足しても、古いセーブを読めるようにする (_migrate)
-#   - 世界の識別子は、世界のデータ (GLB) の中身から決める。データが変わったら、古いセーブは使わない
+#   - 世界の識別子は、データの隣の .json の world_id。なければ、世界のデータ (GLB) の中身から決める
 #   - 書き込みは、一時ファイルへ書いてから付け替える (途中で落ちても、セーブが壊れない)
 #   - 壊れたセーブは、止まらず退ける。消さずに .bad として残す
 #   - 新しいバージョンのセーブ (新しいゲームで作ったもの) は、読まず、上書きもしない
@@ -24,8 +24,12 @@ static func enabled() -> bool:
 	return DisplayServer.get_name() != "headless" or allow_headless
 
 
-# 世界の識別子 (16 文字)。世界のデータの中身から決める。データがなければ、場所の文字から決める
+# 世界の識別子。データの隣の .json に world_id があれば、それ (作り直しても、場所が同じなら変わらない)。
+# なければ、世界のデータ (GLB) の中身から決めた 16 文字。データもなければ、場所の文字から決める
 static func world_id(world_path: String) -> String:
+	var named := WorldLoader.world_id_for(world_path)
+	if not named.is_empty():
+		return named
 	var hash := FileAccess.get_sha256(world_path)
 	if hash.is_empty():
 		hash = world_path.sha256_text()

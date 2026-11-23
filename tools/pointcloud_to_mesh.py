@@ -10,7 +10,9 @@
 """
 
 import argparse
+import hashlib
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -178,6 +180,37 @@ def apply_credit(mesh: trimesh.Trimesh, args: argparse.Namespace) -> None:
         mesh.metadata["license_url"] = args.license_url
 
 
+WORLD_ID_PATTERN = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}")  # ゲーム側 (WorldLoader.WORLD_ID_PATTERN) と同じ決まり
+TILE_PATTERN = re.compile(r"\d{2}[A-Z]{2}\d{4}")  # VIRTUAL SHIZUOKA のタイル番号 (例: 08OF3006)
+
+
+def add_world_id_arguments(parser: argparse.ArgumentParser) -> None:
+    """世界の名前の指定 (--world-id) を足す。セーブは、この名前で世界を見分ける。"""
+    parser.add_argument(
+        "--world-id", help="世界の名前 (英数字と . _ - の 64 文字まで。先頭に . は使えない)。省略すると、入力の名前と原点から決める"
+    )
+
+
+def derive_world_id(source: Path, origin: np.ndarray) -> str:
+    """元データの名前 (タイル番号があればそれ) と原点から、世界の名前を決める。
+
+    同じ場所なら、作り直しても、メッシュの細かさや切り出しを変えても、同じ名前になる
+    (範囲や細かさは、名前の元にしない)。別の場所なら、原点が違うので、別の名前になる。
+    """
+    tile = TILE_PATTERN.search(source.stem)
+    name = tile.group(0) if tile else re.sub(r"[^A-Za-z0-9]+", "-", source.stem).strip("-")[:40] or "world"
+    spot = f"{float(origin[0]):.2f},{float(origin[1]):.2f}"
+    return f"{name}-{hashlib.sha256(spot.encode()).hexdigest()[:8]}"
+
+
+def apply_world_id(mesh: trimesh.Trimesh, args: argparse.Namespace, source: Path) -> None:
+    """--world-id か、入力と原点から決めた世界の名前を、メッシュの付属情報に入れる。"""
+    world_id = getattr(args, "world_id", None) or derive_world_id(source, mesh.metadata["origin"])
+    if not WORLD_ID_PATTERN.fullmatch(world_id):
+        raise ValueError(f"世界の名前は、英数字と . _ - の 64 文字までです: {world_id!r}")
+    mesh.metadata["world_id"] = world_id
+
+
 def write_outputs(mesh: trimesh.Trimesh, output: Path) -> None:
     """GLB と、元の座標に戻すための原点を書いた .json を書き出す。
 
@@ -208,12 +241,14 @@ def main() -> None:
         "--crop", type=float, nargs=4, metavar=("XMIN", "YMIN", "XMAX", "YMAX"), help="XY の切り出し範囲"
     )
     add_credit_arguments(parser)
+    add_world_id_arguments(parser)
     args = parser.parse_args()
 
     points = load_points(args.input)
     print(f"読み込み: {len(points):,} 点")
     mesh = convert(points, args.voxel, args.min_points, args.min_component, tuple(args.crop) if args.crop else None)
     apply_credit(mesh, args)
+    apply_world_id(mesh, args, args.input)
     write_outputs(mesh, args.output)
 
 
