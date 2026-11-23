@@ -132,9 +132,15 @@ static func read(world_path: String) -> Dictionary:
 	var result := {"status": "none", "state": {}, "game": {}}
 	if not enabled():
 		return result
+	var pending := {}
 	if not _adopt_v1_game_file():
-		return result  # 直せなかった。壊れたセーブとして退けず、そのまま残して、次に、もう一度試す
-	var pending := _import_legacy(world_path)
+		# 直せなかった。壊れたセーブとして退けず、そのまま残して、次に、もう一度試す。
+		# 世界の名前が game の世界なら、その古いセーブの中身を、そのまま使う (復元しないまま始めると、あとで保存が成功した時に、上書きしてしまう)
+		if world_id(world_path) != "game":
+			return result
+		pending = _read_legacy(path_for(), "game")
+	else:
+		pending = _import_legacy(world_path)
 	if not pending.is_empty():  # 取り込めなかった。古いセーブの中身を、そのまま使う
 		result.status = "ok"
 		result.state = _migrate(pending.merged({"version": VERSION, "world_id": world_id(world_path), "saved_at": ""}))
@@ -273,6 +279,9 @@ static func _import_legacy(world_path: String) -> Dictionary:
 		areas[id] = imported
 		if not _write_document(document):
 			push_warning("古いセーブを取り込めませんでした。元のファイルは、そのまま残します: " + legacy)
+			for key: String in GAME_KEYS:  # 取り込めた時と同じく、いまあるゲーム全体の項目 (時刻) を優先する
+				if document.has(key):
+					whole[key] = document[key]
 			return whole  # 元のファイルは、そのままにしておく (次に、もう一度試す)
 		DirAccess.rename_absolute(ProjectSettings.globalize_path(legacy), ProjectSettings.globalize_path(legacy + ".v1"))
 		return {}

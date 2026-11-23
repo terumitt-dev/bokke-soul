@@ -230,6 +230,21 @@ func _test_legacy_import() -> void:
 	legacy = _write_legacy(id)
 	SaveGame.read(SAMPLE)  # 次の確認のために、いつも通りに取り込む
 
+	# 取り込みに失敗した時も、すでにあるゲーム全体の時刻を優先する (取り込めた時と同じ。時刻が、巻き戻らない)
+	SaveGame.delete()
+	var elsewhere := _state()
+	elsewhere.time_total_hours = 40.0
+	SaveGame.write("res://assets/sample_world.glb.import", elsewhere)
+	legacy = _write_legacy(id)
+	SaveGame.fail_writes = true
+	var kept_time := SaveGame.read(SAMPLE)
+	SaveGame.fail_writes = false
+	check(kept_time.status == "ok" and is_equal_approx(kept_time.state.time_total_hours, 40.0) and is_equal_approx(kept_time.game.time_total_hours, 40.0), "取り込みに失敗した時も、すでにあるゲーム全体の時刻を使う (古い時刻に、巻き戻らない)")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(legacy))
+	SaveGame.delete()
+	legacy = _write_legacy(id)
+	SaveGame.read(SAMPLE)
+
 	# 「はじめから」のあとに、古いセーブが、よみがえらない
 	SaveGame.delete(SAMPLE)
 	check(SaveGame.read(SAMPLE).status == "none", "「はじめから」のあと、古いセーブは、取り込み直されない")
@@ -292,7 +307,11 @@ func _test_legacy_import() -> void:
 	var stuck := SaveGame.read(game_world)
 	var stuck_write := SaveGame.write(game_world, _state())
 	SaveGame.fail_writes = false
-	check(stuck.status == "none" and FileAccess.file_exists(game_file) and not FileAccess.file_exists(game_file + ".bad"), "直せなかった古いセーブ (game.json) は、退けず、そのまま残す")
+	check(stuck.status == "ok" and SaveGame.decode_vector(stuck.state.spawn) == Vector3(5, 6, 7), "直せなくても、世界の名前が game なら、古いセーブの中身を、そのまま使える")
+	check(FileAccess.file_exists(game_file) and not FileAccess.file_exists(game_file + ".bad"), "直せなかった古いセーブ (game.json) は、退けず、そのまま残す")
+	SaveGame.fail_writes = true
+	check(SaveGame.read(SAMPLE).status == "none" and FileAccess.file_exists(game_file), "別の世界は、直せない game.json を、自分のものとして使わない (そのまま残す)")
+	SaveGame.fail_writes = false
 	check(not stuck_write and _is_v1_file(game_file), "直せなかった間は、保存もしない (古いセーブを、上書きしない)")
 	var other_world := SaveGame.read(SAMPLE)  # 別の世界を先に読んでも、game.json を壊したり、退けたりしない
 	check(other_world.status == "none" and not FileAccess.file_exists(SaveGame.path_for(SAMPLE) + ".bad"), "世界の名前が game だった古いセーブは、別の世界を読んでも、退けられない")
