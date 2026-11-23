@@ -108,3 +108,13 @@ godot --path game res://scenes/world_local.tscn -- --world=/絶対パス/terrain
 - 点群 (`pointcloud_to_mesh.py`): ボクセルは角ばった形なので、面ごとの法線 (頂点を面ごとに分ける。形は変わらない)
 
 ゲーム側 (`WorldLoader`) も、法線のない GLB を読むと、読み込む時に法線を作ります (古い GLB やほかの GLB のための備えです)。
+
+## 複数のマップを、まとめて変換する
+
+`tools/areas.json` に、使うマップ (タイル) と、その名前、出典を書いてあります。次のコマンドで、全てのマップを、同じ決まり (名前、出典、篝火の場所、世界の名前) で、変換できます。
+
+```
+.venv/bin/python tools/build_areas.py data/raw/virtual-shizuoka data/processed --stride 2
+```
+
+元データは、`<source>-<タイル番号>/<タイル番号>_DEM.txt` の場所に置きます (`areas.json` の `source` が、フォルダ名の前半です)。名前は、近くの道や歩道の名前に、方角を付けたものです (出典は `docs/data-sources.md`)。
