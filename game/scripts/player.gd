@@ -184,14 +184,23 @@ func _update_nearby_bonfire() -> void:
 func rest() -> void:
 	if rescanning or nearby_bonfire == null:
 		return
+	var first_time := not has_rested
 	spawn_position = nearby_bonfire.rest_position()
 	has_rested = true
 	# 先に、点の表現が、周囲を確かめた所にする。そのあとで知らせる (その時にセーブされる)。
 	# 逆だと、休んで確かめた範囲が、セーブに入らない
 	get_tree().call_group("point_world", "on_rest", nearby_bonfire.global_position)
 	# 休んだ知らせを先に出す。保存に失敗した時の知らせが、そのあとで上に出て、残るように
-	_show_message("基準点を確定しました", NOTICE_SECONDS)
+	_show_message(_rest_message(nearby_bonfire, first_time), NOTICE_SECONDS)
 	rested.emit(nearby_bonfire.global_position)
+
+
+# 休んだ時の知らせ。名前のある篝火は、その名前を出す (初めては「火を灯した」、2 度目からは「休んだ」)。名前がなければ、基準点
+func _rest_message(bonfire: Node3D, first_time: bool) -> String:
+	var bonfire_name: String = bonfire.display_name() if bonfire.has_method("display_name") else ""
+	if bonfire_name.is_empty():
+		return "基準点を確定しました"
+	return "「%s」に火を灯した" % bonfire_name if first_time else "「%s」で休んだ" % bonfire_name
 
 
 # 画面に、しばらくメッセージを出す。あとから出した知らせが、前の知らせの上に出て、残る

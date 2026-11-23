@@ -79,6 +79,36 @@ static func origin_for(path: String) -> Variant:
 	return SaveGame.decode_vector(json.data.get("origin"))
 
 
+# マップの名前 (データの隣の .json の name。例: 寒天林道)。なければ空
+static func name_for(path: String) -> String:
+	var sidecar := path.get_basename() + ".json"
+	if not FileAccess.file_exists(sidecar):
+		return ""
+	var json := JSON.new()
+	if json.parse(FileAccess.get_file_as_string(sidecar)) != OK or not (json.data is Dictionary):
+		return ""
+	var value: Variant = json.data.get("name")
+	return (value as String).strip_edges() if value is String else ""
+
+
+# 篝火を置く場所を、ゲームの座標 (x, 高さ, z) で返す。データの隣の .json の bonfire (測量座標 [東, 北, 標高]) を、
+# origin を引いて、軸を直す。測量座標で持っているので、世界を作り直して原点が動いても、同じ場所を指す。
+# bonfire か origin がない、または、不正なら null
+static func bonfire_for(path: String) -> Variant:
+	var sidecar := path.get_basename() + ".json"
+	if not FileAccess.file_exists(sidecar):
+		return null
+	var json := JSON.new()
+	if json.parse(FileAccess.get_file_as_string(sidecar)) != OK or not (json.data is Dictionary):
+		return null
+	var survey: Variant = SaveGame.decode_vector(json.data.get("bonfire"))
+	var origin: Variant = SaveGame.decode_vector(json.data.get("origin"))
+	if survey == null or origin == null:
+		return null
+	var moved: Vector3 = survey - origin  # 測量座標 (東, 北, 標高) での、原点からの距離
+	return Vector3(moved.x, moved.z, -moved.y)
+
+
 # 世界の名前 (データの隣の .json の world_id)。ない、または、ファイル名に使えない文字を含む時は空
 static func world_id_for(path: String) -> String:
 	var sidecar := path.get_basename() + ".json"

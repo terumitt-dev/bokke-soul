@@ -52,12 +52,19 @@ func _ready() -> void:
 
 	_bounds = bounds
 
-	# 世界の中央に一番近い地面の上空から降りる (中央に穴があっても、地面のある所に降りる)
-	var start := WorldLoader.pick_start(meshes, bounds.get_center())
-	start.y += START_HEIGHT
-	player.global_position = start
-	player.spawn_position = start
-	_add_start_bonfire(meshes, start)
+	# マップの篝火 (データの .json の bonfire) があれば、そこへ置いて、そこから始まる。
+	# なければ、世界の中央に一番近い地面の上空から降りて、すぐ前に篝火を置く (中央に穴があっても、地面のある所に降りる)
+	var path := WorldLoader.resolve_path(world_path)
+	var area_fire := _add_area_bonfire(path, meshes)
+	if area_fire != null:
+		player.global_position = area_fire.rest_position() + Vector3(0.0, START_HEIGHT, 0.0)
+		player.spawn_position = area_fire.rest_position()
+	else:
+		var start := WorldLoader.pick_start(meshes, bounds.get_center())
+		start.y += START_HEIGHT
+		player.global_position = start
+		player.spawn_position = start
+		_add_start_bonfire(meshes, start)
 
 	_points = _add_points(world)
 	_setup_save(meshes)
@@ -89,6 +96,22 @@ func _on_close_requested() -> void:
 	else:
 		_close_held = false
 		tree.auto_accept_quit = true
+
+
+# マップの篝火を置く。場所は、データの .json の bonfire (測量座標)。置けた篝火を返す。
+# 場所がない、または、作り直した世界で地面のない所 (範囲の外、地面の中) になる時は、置かず null を返す
+func _add_area_bonfire(path: String, meshes: Array) -> Node3D:
+	var place: Variant = WorldLoader.bonfire_for(path)
+	if place == null or not _is_on_ground(meshes, place):
+		if place != null:
+			push_warning("篝火の場所に地面がないので、いつもの始まり方にします: " + str(place))
+		return null
+	var fire: Node3D = load("res://scenes/bonfire.tscn").instantiate()
+	fire.name = "AreaBonfire"
+	fire.area_name = WorldLoader.name_for(path)
+	add_child(fire)
+	fire.global_position = place
+	return fire
 
 
 # 最初の基準点として、始めた場所のすぐ前に、篝火を 1 つ置く。ここで休める (休むとセーブされ、落ちたらここへ戻る)。
