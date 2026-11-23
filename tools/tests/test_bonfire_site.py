@@ -118,3 +118,11 @@ def test_shrinking_the_margin_on_a_small_map_warns():
     gx, gy = np.meshgrid(xs, ys)
     with pytest.warns(UserWarning, match="縮めました"):
         d2m.find_flat_spot(xs, ys, 100.0 + 0.1 * gx, margin=40.0)
+
+
+def test_grid_with_different_spacing_still_finds_a_place():
+    # 東西 0.5 m、南北 10 m の間隔の格子 (load_dem が受け付ける形)。窓を東西の間隔だけで決めると、置ける場所がなくなる
+    xs, ys = np.arange(0, 201, 0.5), np.arange(0, 151, 10.0)
+    gx, gy = np.meshgrid(xs, ys)
+    east, north, elevation, _ = d2m.find_flat_spot(xs, ys, 100.0 + 0.0 * gx)
+    assert xs[0] <= east <= xs[-1] and ys[0] <= north <= ys[-1] and elevation == 100.0

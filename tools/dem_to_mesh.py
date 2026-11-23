@@ -74,7 +74,9 @@ def heightfield_mesh(xs: np.ndarray, ys: np.ndarray, z: np.ndarray) -> trimesh.T
 
 # 篝火を置く場所を探す時の、既定の値 (m)
 BONFIRE_MARGIN = 40.0  # マップの端から、これだけ離す (端は、隣のマップへの出口になる)
-BONFIRE_RADIUS = 6.0  # この半径の中が、平らな場所を選ぶ
+BONFIRE_RADIUS = 6.0  # この半径の中 (一辺 2 x 半径 ほどの正方形の窓) が、平らな場所を選ぶ
+# 傾き (tan) の差が、これ未満なら「同じくらい平ら」と見なして、中央に近い方を選ぶ (0.01 は、約 0.57 度)
+CENTER_WEIGHT = 0.01
 
 
 def find_flat_spot(
@@ -94,7 +96,8 @@ def find_flat_spot(
     gy, gx = np.gradient(z, dy, dx)
     slope2 = gx**2 + gy**2  # 傾き (tan) の二乗。欠けの周りは NaN
     valid = np.isfinite(slope2)
-    window = 2 * max(1, round(radius / dx)) + 1
+    # 窓は、東西と南北で、別々の格子間隔から決める (間隔が違う格子でも、窓が、格子より大きくならない)
+    window = (2 * max(1, round(radius / dy)) + 1, 2 * max(1, round(radius / dx)) + 1)
     full = ndimage.uniform_filter(valid.astype(float), window, mode="constant") > 1 - 1e-6  # 窓の中に、欠けがない
     rms = np.sqrt(np.maximum(ndimage.uniform_filter(np.where(valid, slope2, 0.0), window, mode="constant"), 0.0))
 
@@ -108,7 +111,7 @@ def find_flat_spot(
     center = np.array([(xs[0] + xs[-1]) / 2, (ys[0] + ys[-1]) / 2])
     spread = max(xs[-1] - xs[0], ys[-1] - ys[0]) / 2
     nearness = np.hypot(gx_grid - center[0], gy_grid - center[1]) / spread
-    score = np.where(allowed, rms + 0.01 * nearness, np.inf)  # 同じくらい平らなら、中央に近い方
+    score = np.where(allowed, rms + CENTER_WEIGHT * nearness, np.inf)  # 同じくらい平らなら、中央に近い方
     row, col = np.unravel_index(np.argmin(score), score.shape)
     return float(xs[col]), float(ys[row]), float(z[row, col]), float(np.degrees(np.arctan(rms[row, col])))
 
@@ -166,7 +169,7 @@ def main() -> None:
     add_credit_arguments(parser)
     add_world_id_arguments(parser)
     add_name_argument(parser)
-    parser.add_argument("--bonfire", type=float, nargs=2, metavar=("EAST", "NORTH"), help="篝火を置く場所 (測量座標)。省略すると、平らな場所を探す")
+    parser.add_argument("--bonfire", type=float, nargs=2, metavar=("EAST", "NORTH"), help="篝火を置く場所 (測量座標。最寄りの格子点に寄せる)。省略すると、平らな場所を探す")
     parser.add_argument("--crs", help="座標系 (例: EPSG:6676)。.json に書く。別の座標系のデータを混ぜた時に、気づくため")
     parser.add_argument("--bonfire-margin", type=float, default=BONFIRE_MARGIN, help="篝火を置く場所を、端から離す距離 (m)")
     args = parser.parse_args()
