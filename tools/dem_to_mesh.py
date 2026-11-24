@@ -116,6 +116,14 @@ def find_flat_spot(
     return float(xs[col]), float(ys[row]), float(z[row, col]), float(np.degrees(np.arctan(rms[row, col])))
 
 
+def sample_indices(count: int, stride: int) -> np.ndarray:
+    """0 番から stride 個おきと、最後 (count - 1 番) の、番号。最後の間隔だけ、stride より短くなることがある。"""
+    indices = list(range(0, count, stride))
+    if indices[-1] != count - 1:
+        indices.append(count - 1)
+    return np.array(indices)
+
+
 def convert(
     xs: np.ndarray,
     ys: np.ndarray,
@@ -132,7 +140,9 @@ def convert(
         raise ValueError("stride は 1 以上にしてください")
     # 篝火の場所は、間引く前の格子で決める (間引きの細かさを変えても、同じ場所になる)
     spot = _bonfire_spot(xs, ys, z, bonfire, margin)
-    xs, ys, z = xs[::stride], ys[::stride], z[::stride, ::stride]
+    # 間引いても、最後の列と行は、必ず使う (端が、stride の割り切れ方で、欠けない。隣のタイルとの継ぎ目が、そろう)
+    cols, rows = sample_indices(len(xs), stride), sample_indices(len(ys), stride)
+    xs, ys, z = xs[cols], ys[rows], z[np.ix_(rows, cols)]
     mesh = heightfield_mesh(xs, ys, z)
     # 測量の座標は値が大きいので、float32 の精度落ちを避けて、最小値を原点にする
     origin = mesh.vertices.min(axis=0)
