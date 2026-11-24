@@ -433,6 +433,12 @@ func _setup_save() -> void:
 		_apply_time(result.game.get("time_total_hours"))  # 初めて訪れるエリアでも、時刻は続く
 	for i in range(1, _tiles.size()):
 		var other := SaveGame.read(_tiles[i].path)
+		if other.status == "unavailable":
+			# このタイルの古いセーブを、新しい形に直せなかった。復元しないまま、そのタイルで保存して、古い進行を置き換えないよう、保存せずに遊ぶ
+			push_warning("隣のタイルの古いセーブを読み込めなかったので、保存しません: " + _tiles[i].path)
+			_save_active = false
+			_notify.call_deferred("古いセーブを読み込めませんでした。このあいだは、保存しません")
+			return
 		if other.status == "ok":
 			_apply_tile_save(_tiles[i], other.state, false)
 	player.rested.connect(_on_rested)

@@ -211,6 +211,30 @@ func _initialize() -> void:
 	scene4.queue_free()
 	await process_frame
 
+	# 隣のタイルの古い (バージョン 1) セーブを取り込めない (書き込みに失敗する): 保存せずに遊ぶ。古い進行を、置き換えない
+	SaveGame.delete()
+	var legacy_path := "%s/reg-b.json" % (DIR + "/saves")
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(DIR + "/saves"))
+	_write(legacy_path, JSON.stringify({"version": 1, "world_id": "reg-b", "saved_at": "2026-11-22T07:42:00", "has_rested": true, "spawn": [5.0, 6.0, 7.0]}))
+	SaveGame.fail_writes = true
+	var scene_u := _start(path_a, true)
+	for i in 40:
+		await physics_frame
+	SaveGame.fail_writes = false
+	var player_u: CharacterBody3D = scene_u.get_node("Player")
+	var fire_u: Node3D = scene_u.find_child("AreaBonfire_b", true, false)
+	player_u.global_position = fire_u.global_position + Vector3(0.5, 0.5, 0.0)
+	for i in 10:
+		await physics_frame
+	player_u._update_nearby_bonfire()
+	player_u.rest()
+	check(not scene_u.get_node("World")._save_active and not FileAccess.file_exists(SaveGame.path_for()) and FileAccess.file_exists(legacy_path), "隣のタイルの古いセーブを取り込めなかった間は、保存しない (古いセーブは、そのまま残る)")
+	scene_u.queue_free()
+	await process_frame
+	await process_frame
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(legacy_path))
+	SaveGame.delete()
+
 	SaveGame.delete()
 	SaveGame.allow_headless = false
 
