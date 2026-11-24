@@ -47,6 +47,7 @@ static func entry_for(path: String) -> Dictionary:
 		"name": WorldLoader.name_of(data),
 		"origin": origin,
 		"size": size,
+		"region": WorldLoader.world_id_of({"world_id": data.get("region")}),  # 地域の名前 (同じ地域のマップは、まとめて読み込む)。なければ空
 	}
 
 

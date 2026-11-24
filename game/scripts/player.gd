@@ -184,9 +184,11 @@ func _update_nearby_bonfire() -> void:
 func rest() -> void:
 	if rescanning or nearby_bonfire == null:
 		return
-	var first_time := not has_rested
+	var first_time: bool = not nearby_bonfire.lit if "lit" in nearby_bonfire else not has_rested
 	spawn_position = nearby_bonfire.rest_position()
 	has_rested = true
+	if "lit" in nearby_bonfire:
+		nearby_bonfire.lit = true
 	# 先に、点の表現が、周囲を確かめた所にする。そのあとで知らせる (その時にセーブされる)。
 	# 逆だと、休んで確かめた範囲が、セーブに入らない
 	get_tree().call_group("point_world", "on_rest", nearby_bonfire.global_position)

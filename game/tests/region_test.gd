@@ -1,0 +1,187 @@
+extends SceneTree
+
+# 実行: godot --headless --path game --script res://tests/region_test.gd
+# 地域 (同じ region のマップを、まとめて読み込んで、並べる): 並び方、タイルの間を歩いて渡る (暗転も移動もない)、
+# タイルごとの篝火と記録、関所 (地域の外の隣)、続きから、を確かめる。
+# サンプルの世界の写しを使う。A と B は、東西に隣り合う同じ地域。X は、A の西にある別の地域。先に godot --headless --path game --import --quit しておく
+
+const SAMPLE := "res://assets/sample_world.glb"
+const DIR := "user://test_region"
+const ORIGIN := Vector3(1000.0, 2000.0, 50.0)
+
+var failures: Array[String] = []
+
+
+func check(ok: bool, label: String) -> void:
+	print(("PASS " if ok else "FAIL ") + label)
+	if not ok:
+		failures.append(label)
+
+
+func _write(path: String, text: String) -> void:
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(text)
+	file.close()
+
+
+func _survey_of(local: Vector3, origin: Vector3) -> Array:
+	return [local.x + origin.x, -local.z + origin.y, local.y + origin.z]
+
+
+func _make_world(name: String, label: String, origin: Vector3, size: Vector3, region: String, bonfire: Variant) -> String:
+	var world := "%s/%s.glb" % [DIR, name]
+	var file := FileAccess.open(world, FileAccess.WRITE)
+	file.store_buffer(FileAccess.get_file_as_bytes(SAMPLE))
+	file.close()
+	var sidecar := {"world_id": "reg-" + name, "name": label, "origin": [origin.x, origin.y, origin.z], "size": [size.x, size.y, size.z]}
+	if region != "":
+		sidecar["region"] = region
+	if bonfire != null:
+		sidecar["bonfire"] = _survey_of(bonfire, origin)
+	_write("%s/%s.json" % [DIR, name], JSON.stringify(sidecar))
+	return world
+
+
+func _start(path: String, with_save := false) -> Node:
+	var scene: Node = load("res://scenes/world_local.tscn").instantiate()
+	var settings := GameSettings.new()
+	settings.weather_enabled = false
+	scene.get_node("DayNight").settings = settings
+	scene.get_node("World").world_path = path
+	scene.get_node("World").save_enabled = with_save
+	scene.get_node("World").auto_change_scene = false
+	root.add_child(scene)
+	return scene
+
+
+func _initialize() -> void:
+	var loaded: Dictionary = WorldLoader.load_world(SAMPLE)
+	root.add_child(loaded.node)
+	await process_frame
+	var meshes: Array = loaded.node.find_children("*", "MeshInstance3D", true, false)
+	var box := AABB()
+	for i in meshes.size():
+		var b: AABB = meshes[i].global_transform * meshes[i].get_aabb()
+		box = b if i == 0 else box.merge(b)
+	var ground := WorldLoader.pick_start(meshes, Vector3(10.0, 0.0, -10.0))
+	loaded.node.free()
+	var size := box.size
+
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(DIR))
+	# A (始める世界)、B (A の東に、隙間なく。起伏の標高の原点が、少し違う)、X (A の西。別の地域)
+	var origin_b := ORIGIN + Vector3(size.x, 0.0, 0.0)
+	var path_a := _make_world("a", "西の台地", ORIGIN, size, "test-region", ground)
+	var path_b := _make_world("b", "東の台地", origin_b + Vector3(0.0, 0.0, 3.0), size, "test-region", ground)
+	var path_x := _make_world("x", "外の地", ORIGIN - Vector3(size.x, 0.0, 0.0), size, "other-region", null)
+	WorldLoader.arrival = {}
+
+	var entries := WorldRegistry.scan(DIR)
+	check(entries.size() == 3 and entries.filter(func(e: Dictionary) -> bool: return e.region == "test-region").size() == 2, "一覧に、地域の名前 (region) が入る")
+
+	# 始める: A と、同じ地域の B が、並んで読み込まれる (X は、別の地域なので、読み込まれない)
+	var scene := _start(path_a)
+	for i in 40:
+		await physics_frame
+	var world: Node = scene.get_node("World")
+	var player: CharacterBody3D = scene.get_node("Player")
+	check(world._tiles.size() == 2 and world._tiles[0].entry.world_id == "reg-a" and world._tiles[1].entry.world_id == "reg-b", "同じ地域の 2 つのタイルを、まとめて読み込む。別の地域は、読み込まない")
+	var offset_b: Vector3 = world._tiles[1].offset
+	check(is_equal_approx(offset_b.x, size.x) and is_equal_approx(offset_b.y, 3.0) and is_equal_approx(offset_b.z, 0.0), "B は、A の東に、測量座標の位置に並ぶ (東へ幅、高さは、B の原点の標高が 3 m 高い分): %s" % [offset_b])
+	check(world.find_children("*", "PointWorld", false, false).size() == 2, "タイルごとに、点の表現がある")
+	var glitch_layers := 0
+	for n in world.find_children("GlitchLayer", "CanvasLayer", true, false):
+		glitch_layers += 1
+	check(glitch_layers == 1, "画面全体のノイズの層は、1 つだけ (重ねない): %d" % glitch_layers)
+	var fires := get_nodes_in_group("bonfire")
+	check(fires.size() == 2, "篝火は、タイルごとに 1 つ")
+	var fire_b: Node3D = scene.find_child("AreaBonfire_b", true, false)
+	check(fire_b != null and fire_b.global_position.is_equal_approx(ground + offset_b) and fire_b.display_name() == "東の台地の篝火", "B の篝火は、B の座標の場所を、並んだ位置に置く。名前もつく")
+	check(world._entry.world_id == "reg-a" and world._exits.keys() == ["west"] and world._exits.west.world_id == "reg-x", "A の関所は、別の地域の X だけ (西)。B は、同じ地域なので、関所ではない")
+
+	# B の中へ歩いて渡る: 暗転も、移動もない。関所は、B のものに変わる (B の端に、別の地域はない)
+	await create_timer(1.7).timeout
+	var traveled := []
+	world.traveled.connect(func(path: String) -> void: traveled.append(path))
+	player.global_position = Vector3(size.x + 5.0, ground.y + offset_b.y + 2.0, -size.z / 2.0)
+	for i in 30:
+		await physics_frame
+	check(world._entry.world_id == "reg-b" and world._exits.is_empty(), "B に入る。B の関所はない (A は、同じ地域)")
+	for i in 60:
+		await physics_frame
+	check(traveled.is_empty() and WorldLoader.arrival.is_empty() and (world._veil == null or world._veil.modulate.a < 0.01), "地域の中は、暗転も、移動もしない")
+	check(player.is_on_floor(), "B の地面に立てる (継ぎ目で落ちない)")
+	player.global_position = Vector3(5.0, ground.y + 2.0, -size.z / 2.0)
+	for i in 30:
+		await physics_frame
+	check(world._entry.world_id == "reg-a" and world._exits.has("west"), "A へ戻ると、関所は、また西の X")
+
+	# A の西の端 = 関所: 別の地域へ移る (暗転する)
+	player.global_position = Vector3(1.0, ground.y + 2.0, -size.z / 2.0)
+	for i in 20:
+		await physics_frame
+	await create_timer(0.6).timeout
+	check(WorldLoader.arrival.get("path") == path_x, "関所を越えると、別の地域 (X) へ移る")
+	scene.queue_free()
+	await process_frame
+	WorldLoader.arrival = {}
+
+	# タイルごとの記録: B の篝火で休むと、B の記録ができる (A も、遊んだので、記録がある)。最後に遊んだのは B
+	SaveGame.directory = DIR + "/saves"
+	SaveGame.allow_headless = true
+	SaveGame.delete()
+	var scene2 := _start(path_a, true)
+	for i in 40:
+		await physics_frame
+	var world2: Node = scene2.get_node("World")
+	var player2: CharacterBody3D = scene2.get_node("Player")
+	var b_fire: Node3D = scene2.find_child("AreaBonfire_b", true, false)
+	player2.global_position = b_fire.global_position + Vector3(0.5, 0.5, 0.0)
+	for i in 10:
+		await physics_frame
+	player2._update_nearby_bonfire()
+	player2.rest()
+	check(player2.message.text == "「東の台地の篝火」に火を灯した" and b_fire.lit, "B の篝火で、初めて休むと、その篝火の名前で「火を灯した」")
+	var a_fire: Node3D = scene2.find_child("AreaBonfire", true, false)
+	check(not a_fire.lit, "A の篝火は、まだ灯っていない (篝火ごとの状態)")
+	var record_b := SaveGame.read(path_b)
+	var record_a := SaveGame.read(path_a)
+	check(record_b.status == "ok" and record_b.state.has_rested and SaveGame.decode_vector(record_b.state.spawn).is_equal_approx(b_fire.rest_position() - world2._tiles[1].offset), "B の記録に、最後に休んだ位置 (B の座標) が入る")
+	check(record_a.status == "ok" and not record_a.state.has_rested, "A も、遊んだので、記録がある (休んでいない)")
+	check(SaveGame.current_area() == "reg-b", "最後に遊んだエリアは、B")
+	player2.rest()
+	check(player2.message.text == "「東の台地の篝火」で休んだ", "同じ篝火で、2 度目に休むと「休んだ」")
+	scene2.queue_free()
+	await process_frame
+	await process_frame
+
+	# 続きから (A を始める世界にして始める): B の篝火の火は、灯ったまま。B の確かめた所も戻る
+	var scene3 := _start(path_a, true)
+	for i in 40:
+		await physics_frame
+	var b_fire3: Node3D = scene3.find_child("AreaBonfire_b", true, false)
+	check(b_fire3.lit and not scene3.find_child("AreaBonfire", true, false).lit, "続きから: B の篝火は、灯ったまま。A の篝火は、灯っていない")
+	scene3.queue_free()
+	await process_frame
+	await process_frame
+
+	# B を始める世界にして始める (最後に遊んだタイルから、続きから): B が原点。A は、西に並ぶ。B の最後に休んだ位置から始まる
+	var scene4 := _start(path_b, true)
+	for i in 40:
+		await physics_frame
+	var world4: Node = scene4.get_node("World")
+	var player4: CharacterBody3D = scene4.get_node("Player")
+	var a_offset: Vector3 = world4._tiles[1].offset
+	check(world4._tiles[0].entry.world_id == "reg-b" and is_equal_approx(a_offset.x, -size.x) and is_equal_approx(a_offset.y, -3.0), "B を始める世界にすると、B が原点で、A は、その西に並ぶ: %s" % [a_offset])
+	check(player4.has_rested and Vector2(player4.global_position.x - (ground.x + 0.0), player4.global_position.z - (ground.z + 1.5)).length() < 1.0, "B の、最後に休んだ篝火から始まる: %s" % [player4.global_position])
+	scene4.queue_free()
+	await process_frame
+
+	SaveGame.delete()
+	SaveGame.allow_headless = false
+	for sub in ["/saves", ""]:
+		if not DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(DIR + sub)):
+			continue
+		for file in DirAccess.get_files_at(DIR + sub):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(DIR + sub + "/" + file))
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(DIR + sub))
+	quit(1 if failures.size() > 0 else 0)

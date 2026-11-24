@@ -2,6 +2,10 @@ extends Node3D
 # 指定した世界 (WorldLoader.resolve_path) を読み込み、当たり判定を付けて、歩けるようにする。
 # 指定は起動時の引数: godot --path game res://scenes/world_local.tscn -- --world=/path/to/world.glb
 #
+# 地域: マップ (タイル) の .json に region (地域の名前) があれば、同じ地域のタイルを、まとめて読み込んで、測量座標の位置に
+# 並べる。タイルの間は、暗転も読み込みもなく、歩いて渡れる。タイルごとに、篝火、点の表現、セーブの記録がある。
+# 地域の外の隣 (別の地域) への端は「関所」で、越えると、その地域を読み込む (暗転する)。
+#
 # セーブ: 篝火で休んだ時と、ゲームを閉じる時に、続きの状態 (最後に休んだ篝火、時刻、確かめた所) を保存する。
 # 次に始める時は、それを読んで、続きから始める。セーブが壊れていても、新しいバージョンのものでも、ゲームは遊べる
 # (壊れていれば退けて新しく始め、新しいバージョンのものは、読まず、上書きもしない)
@@ -18,6 +22,7 @@ const EXIT_COOLDOWN_MS := 1500  # 着いてから、出口が効くまでの時�
 const SAVE_RETRY_MS := 3000  # 保存に失敗して、移るのをやめた時に、もう一度試すまでの時間
 const FADE_SECONDS := 0.4
 const GAME_SCENE := "res://scenes/world_local.tscn"
+const MAX_REGION_TILES := 16  # 1 つの地域で、まとめて読み込むタイルの数の上限
 const NOTICE_SECONDS := 3.0  # 保存に失敗した知らせを出しておく時間 (休んだ知らせより長い)
 const CLOSE_HOLD_SECONDS := 8.0  # 閉じる時に保存に失敗した時、終了を保留しておく時間
 
@@ -34,17 +39,20 @@ signal traveled(path: String)
 @onready var player: CharacterBody3D = get_node("../Player")
 @onready var message: Label = get_node("../HUD/Message")
 
-var _points: PointWorld
-var _bounds := AABB()  # 読み込んだ世界の範囲 (セーブに入れて、世界が作り直されたかを知るのに使う)
-var _save_world := ""  # セーブの対象の世界の場所
+# 読み込んだタイル。最初が、始める世界 (原点に置く)。タイルごとの情報 (辞書):
+#   path, entry (一覧での情報)、offset (始める世界から見た位置)、world (世界のノード)、meshes、bounds (そのタイルの座標での範囲)、
+#   fire (篝火)、points (点の表現)、loaded_reveal (保存から読んだ、確かめた所の地図。点の表現が無効な間も、保存に引き継ぐ)、
+#   spawn_local (最後に休んだ位置。そのタイルの座標。なければ null)、visited (遊んだか。遊んだタイルだけ保存する)
+var _tiles: Array[Dictionary] = []
+var _current := 0  # いま、プレイヤーがいるタイル
+var _entries: Array[Dictionary] = []  # 置き場の、遊べるマップの一覧
+var _points: PointWorld  # 始める世界の点の表現
+var _bounds := AABB()  # 始める世界の範囲 (セーブに入れて、世界が作り直されたかを知るのに使う)
 var _save_active := false
-# セーブから読んだ、確かめた所の地図 (PNG)。点の表現が無効な間も、保存に引き継ぐ。
-# 設定を一時的に切り替えただけで、それまで確かめた所が失われないように
-var _loaded_reveal := ""
 var _close_held := false  # 保存に失敗して、終了を保留している間
-var _path := ""  # 読み込んだ世界の場所
-var _entry := {}  # この世界の、一覧 (WorldRegistry) での情報
-var _exits := {}  # 隣のマップ (方角 → 情報)
+var _path := ""  # 始める世界の場所
+var _entry := {}  # いま、プレイヤーがいるタイルの、一覧 (WorldRegistry) での情報
+var _exits := {}  # 関所 (いまのタイルの端から行ける、別の地域のマップ。方角 → 情報)
 var _arrival := {}  # 前のマップから引き継いだもの (WorldLoader.arrival)
 var _setup_points_position := Vector3.ZERO  # 探索地図を作った時の、プレイヤーの位置 (着く位置で作られたかを、テストで確かめる)
 var _arrived_at := 0  # 着いた時刻 (ミリ秒)
@@ -58,11 +66,63 @@ func _ready() -> void:
 	_path = WorldLoader.resolve_path(world_path)
 	_arrival = WorldLoader.arrival  # 引き継ぎは、ここで受け取って、空にする (次に始める時に、残らないように)
 	WorldLoader.arrival = {}
-	var loaded := WorldLoader.load_world(_path)
+	_entries = WorldRegistry.scan(_path.get_base_dir())
+
+	# 始める世界と、同じ地域のタイルを、まとめて読み込む。始める世界を原点に置き、ほかは、測量座標の位置に並べる
+	var home_entry := _entry_by_id(WorldLoader.world_id_for(_path))
+	var plan: Array[Dictionary] = [{"path": _path, "entry": home_entry, "offset": Vector3.ZERO}]
+	if not home_entry.is_empty() and home_entry.region != "":
+		for other in _entries:
+			if plan.size() >= MAX_REGION_TILES:
+				push_warning("地域のタイルが多すぎるので、%d 個までにします" % MAX_REGION_TILES)
+				break
+			if other.region == home_entry.region and other.world_id != home_entry.world_id:
+				plan.append({"path": other.path, "entry": other, "offset": WorldRegistry.convert_position(other, home_entry, Vector3.ZERO)})
+	for i in plan.size():
+		var tile := _load_tile(plan[i], i == 0)
+		if tile.is_empty():
+			if i == 0:
+				return  # 始める世界が読めない (_load_tile が、知らせた)
+			continue
+		_tiles.append(tile)
+	var home := _tiles[0]
+	_bounds = home.bounds
+
+	# 始める世界の篝火 (データの .json の bonfire) があれば、そこから始まる。
+	# なければ、世界の中央に一番近い地面の上空から降りて、すぐ前に篝火を置く (中央に穴があっても、地面のある所に降りる)
+	var area_fire: Node3D = home.fire
+	if area_fire != null:
+		player.global_position = area_fire.rest_position() + Vector3(0.0, START_HEIGHT, 0.0)
+		player.spawn_position = area_fire.rest_position()
+	else:
+		var start := WorldLoader.pick_start(home.meshes, _bounds.get_center())
+		start.y += START_HEIGHT
+		player.global_position = start
+		player.spawn_position = start
+		_add_start_bonfire(home.meshes, start)
+
+	_place_arrival(home.meshes)
+	_setup_points_position = player.global_position  # テスト用: 探索地図を作る時の、プレイヤーの位置
+	for i in _tiles.size():
+		_tiles[i]["points"] = _add_points(_tiles[i].world, i == 0)
+	_points = home.points
+	_setup_save()
+	_update_current(true)
+	_finish_arrival()
+
+
+# 1 つのタイルを読み込む: 世界、当たり判定、篝火。読めなければ、空 (始める世界なら、画面に知らせる)
+func _load_tile(plan: Dictionary, is_home: bool) -> Dictionary:
+	var loaded := WorldLoader.load_world(plan.path)
 	if loaded.node == null:
-		_fail(loaded.error)
-		return
+		if is_home:
+			_fail(loaded.error)
+		else:
+			push_warning("地域のタイルを読み込めませんでした。使いません: " + loaded.error)
+		return {}
 	var world: Node3D = loaded.node
+	var offset: Vector3 = plan.offset
+	world.position = offset  # 木に入れる前に置く (入れてからの座標が、位置の通りになる)
 	add_child(world)
 
 	# 当たり判定は片面。メッシュの法線が内向きだと、地面を抜けてしまう
@@ -73,39 +133,53 @@ func _ready() -> void:
 		mesh.create_trimesh_collision()
 		var box := mesh.global_transform * mesh.get_aabb()
 		bounds = box if i == 0 else bounds.merge(box)
-
-	_bounds = bounds
-
-	# マップの篝火 (データの .json の bonfire) があれば、そこへ置いて、そこから始まる。
-	# なければ、世界の中央に一番近い地面の上空から降りて、すぐ前に篝火を置く (中央に穴があっても、地面のある所に降りる)
-	var area_fire := _add_area_bonfire(_path, meshes)
-	if area_fire != null:
-		player.global_position = area_fire.rest_position() + Vector3(0.0, START_HEIGHT, 0.0)
-		player.spawn_position = area_fire.rest_position()
-	else:
-		var start := WorldLoader.pick_start(meshes, bounds.get_center())
-		start.y += START_HEIGHT
-		player.global_position = start
-		player.spawn_position = start
-		_add_start_bonfire(meshes, start)
-
-	_place_arrival(meshes)
-	_setup_points_position = player.global_position  # テスト用: 探索地図を作る時の、プレイヤーの位置
-	_points = _add_points(world)
-	_setup_save(meshes)
-	_setup_exits()
-	_finish_arrival()
+	bounds.position -= offset  # そのタイルの座標での範囲にする (セーブに入れる範囲は、そのタイルの座標)
+	return {
+		"path": plan.path, "entry": plan.entry, "offset": offset, "world": world, "meshes": meshes, "bounds": bounds,
+		"fire": _add_area_bonfire(plan.path, meshes, offset), "points": null, "loaded_reveal": "", "spawn_local": null,
+		"visited": is_home,
+	}
 
 
-# 出口の準備。同じ置き場の、隣り合うマップを探す。隣がなければ、出口はない
-func _setup_exits() -> void:
-	var entries := WorldRegistry.scan(_path.get_base_dir())
-	var id := WorldLoader.world_id_for(_path)
-	for entry in entries:
+func _entry_by_id(id: String) -> Dictionary:
+	for entry in _entries:
 		if entry.world_id == id:
-			_entry = entry
-	if not _entry.is_empty():
-		_exits = WorldRegistry.neighbors(entries, _entry)
+			return entry
+	return {}
+
+
+# いま、プレイヤーがいるタイルを決める (範囲の中にいるタイル。どこにもいなければ、そのまま)。変わったら、関所を調べ直して、
+# そのタイルを、遊んだことにする (遊んだタイルだけ保存する)。first は、始まった時 (名前の知らせは出さない)
+func _update_current(first := false) -> void:
+	var index := _current
+	for i in _tiles.size():
+		var local: Vector3 = player.global_position - _tiles[i].offset
+		var box: AABB = _tiles[i].bounds
+		if local.x >= box.position.x and local.x <= box.end.x and local.z >= box.position.z and local.z <= box.end.z:
+			index = i
+			break
+	if not first and index == _current:
+		return
+	_current = index
+	var tile: Dictionary = _tiles[_current]
+	tile["visited"] = true
+	_entry = tile.entry
+	_exits = _gates_of(_entry)
+	if not first and _entry.get("name", "") != "":
+		_notify(_entry.name)  # 入ったタイルの名前
+
+
+# 関所: entry のタイルの端から行ける、別の地域のマップ。同じ地域のマップは、歩いて渡れるので、関所ではない
+func _gates_of(entry: Dictionary) -> Dictionary:
+	var gates := {}
+	if entry.is_empty():
+		return gates
+	var near := WorldRegistry.neighbors(_entries, entry)
+	for direction: String in near:
+		var other: Dictionary = near[direction]
+		if entry.region == "" or other.region != entry.region:
+			gates[direction] = other
+	return gates
 
 
 # 前のマップから移ってきたなら、着く位置を決めて、そこに立たせる (探索地図を作る前に。作る時の位置を、着く位置にするため。
@@ -158,11 +232,14 @@ func _finish_arrival() -> void:
 
 
 func _physics_process(_delta: float) -> void:
+	if _tiles.is_empty():
+		return
+	_update_current()
 	if _traveling or _exits.is_empty() or player.rescanning:
 		return
 	if Time.get_ticks_msec() < _arrived_at + EXIT_COOLDOWN_MS:
 		return
-	var direction := WorldRegistry.edge_toward(_entry, player.global_position, EXIT_MARGIN, _exits)
+	var direction := WorldRegistry.edge_toward(_entry, player.global_position - _tiles[_current].offset, EXIT_MARGIN, _exits)
 	if not direction.is_empty():
 		_travel(direction)
 
@@ -171,7 +248,8 @@ func _physics_process(_delta: float) -> void:
 func _travel(direction: String) -> void:
 	_traveling = true
 	var target: Dictionary = _exits[direction]
-	var position := WorldRegistry.clamp_inside(target, WorldRegistry.convert_position(_entry, target, player.global_position), ARRIVAL_INSET)
+	var local_position: Vector3 = player.global_position - _tiles[_current].offset  # いまのタイルの座標
+	var position := WorldRegistry.clamp_inside(target, WorldRegistry.convert_position(_entry, target, local_position), ARRIVAL_INSET)
 	position.y += START_HEIGHT  # 少し上から降りる (面の高さは、着いてから、床が受ける)
 	# 保存してから移る。最後に遊んだエリアは、行き先にする (着いてから一度も保存しないまま終わっても、行き先から始まる)。
 	# 保存に失敗したら、移らない (いまのマップの探索が、静かに失われないように)。しばらくしてから、もう一度試す
@@ -262,8 +340,10 @@ func _on_close_requested() -> void:
 
 # マップの篝火を置く。場所は、データの .json の bonfire (測量座標)。置けた篝火を返す。
 # 場所がない、または、作り直した世界で地面のない所 (範囲の外、地面の中) になる時は、置かず null を返す
-func _add_area_bonfire(path: String, meshes: Array) -> Node3D:
+func _add_area_bonfire(path: String, meshes: Array, offset: Vector3) -> Node3D:
 	var place: Variant = WorldLoader.bonfire_for(path)
+	if place != null:
+		place += offset  # そのタイルの座標から、始める世界の座標へ
 	# 篝火と、復帰する時に立つ位置の両方が、地面の上にあること (作り直した世界で、地面が上がって埋まる、下がって浮く、
 	# 範囲の外になる、のどれかなら置かない。立つ位置が埋まると、落ちて、同じ位置へ戻ることを繰り返す)
 	if place == null or not _site_is_solid(meshes, place) or not _site_is_solid(meshes, place + Bonfire.REST_OFFSET):
@@ -271,7 +351,7 @@ func _add_area_bonfire(path: String, meshes: Array) -> Node3D:
 			push_warning("篝火の場所が、作り直した世界の地面と合わないので、いつもの始まり方にします: " + str(place))
 		return null
 	var fire: Node3D = load("res://scenes/bonfire.tscn").instantiate()
-	fire.name = "AreaBonfire"
+	fire.name = "AreaBonfire" if offset == Vector3.ZERO else "AreaBonfire_" + path.get_file().get_basename()  # 始める世界の篝火だけ、決まった名前
 	fire.area_name = WorldLoader.name_for(path)
 	add_child(fire)
 	fire.global_position = place
@@ -296,25 +376,27 @@ func _add_start_bonfire(meshes: Array, start: Vector3) -> void:
 	fire.global_position = WorldLoader.pick_start(meshes, Vector3(start.x, 0.0, start.z - START_BONFIRE_DISTANCE))
 
 
-# 点の表現を入れる。歩いた所だけが現れ、まだの所は暗く沈む。off なら入れず (null を返し)、世界は最初から全て見える
-func _add_points(world: Node3D) -> PointWorld:
+# 点の表現を入れる。歩いた所だけが現れ、まだの所は暗く沈む。off なら入れず (null を返し)、世界は最初から全て見える。
+# first でないタイルは、画面全体のノイズの層を作らない (重ねて、何度も描かないため)
+func _add_points(world: Node3D, first := true) -> PointWorld:
 	var mode := point_mode if point_mode in GameSettings.POINT_MODES else GameSettings.load_from().point_mode
 	if mode == "off":
 		return null
 	var points := PointWorld.new()
-	points.name = "PointWorld"
+	points.name = "PointWorld" if first else "PointWorld_" + str(world.get_instance_id())
+	points.glitch_overlay = first
 	add_child(points)
 	points.setup(world, player, PointWorld.Mode.POINTS_ONLY if mode == "points_only" else PointWorld.Mode.MESH_AND_POINTS)
 	return points
 
 
-# セーブを使う準備。あれば読んで、続きから始める。篝火で休んだら、保存する
-func _setup_save(meshes: Array) -> void:
-	_save_world = _path
+# セーブを使う準備。あれば読んで、続きから始める。篝火で休んだら、保存する。
+# 読み込んだタイルごとに、その記録 (篝火に火が灯っているか、確かめた所) を戻す。プレイヤーの位置は、始める世界の記録で決まる
+func _setup_save() -> void:
 	_save_active = save_enabled and GameSettings.load_from().save_enabled and SaveGame.enabled()
 	if not _save_active:
 		return
-	var result := SaveGame.read(_save_world)
+	var result := SaveGame.read(_path)
 	if result.status == "newer":
 		# 新しいバージョンのゲームで作ったセーブ。読めないし、上書きして壊してもいけない。保存せずに遊ぶ
 		push_warning("新しいバージョンのセーブなので、続きからは始めず、保存もしません")
@@ -327,24 +409,51 @@ func _setup_save(meshes: Array) -> void:
 		_notify.call_deferred("古いセーブを読み込めませんでした。このあいだは、保存しません")
 		return
 	if result.status == "ok":
-		_apply_save(result.state, meshes)
+		_apply_tile_save(_tiles[0], result.state, true)
 	else:
 		_apply_time(result.game.get("time_total_hours"))  # 初めて訪れるエリアでも、時刻は続く
-	player.rested.connect(func(_position: Vector3) -> void: save_now())
+	for i in range(1, _tiles.size()):
+		var other := SaveGame.read(_tiles[i].path)
+		if other.status == "ok":
+			_apply_tile_save(_tiles[i], other.state, false)
+	player.rested.connect(_on_rested)
 
 
-# 読んだセーブを、ゲームへ反映する。項目ごとに検証して、不正なものは、黙って無視する。
+# 休んだ。休んだ篝火があるタイルの、最後に休んだ位置を更新して、保存する
+func _on_rested(position: Vector3) -> void:
+	var tile := _tile_at(position)
+	if not tile.is_empty():
+		tile["spawn_local"] = player.spawn_position - tile.offset
+		tile["visited"] = true
+		if tile.fire != null:
+			tile.fire.lit = true
+	save_now()
+
+
+# global 座標 position (水平) を含むタイル。なければ、空
+func _tile_at(position: Vector3) -> Dictionary:
+	for tile in _tiles:
+		var local: Vector3 = position - tile.offset
+		var box: AABB = tile.bounds
+		if local.x >= box.position.x and local.x <= box.end.x and local.z >= box.position.z and local.z <= box.end.z:
+			return tile
+	return {}
+
+
+# 読んだセーブ (1 つのタイルの記録) を、ゲームへ反映する。項目ごとに検証して、不正なものは、黙って無視する。
+# is_home なら、プレイヤーを、最後に休んだ位置に立たせる。そうでないタイルは、篝火の火と、確かめた所だけを戻す。
 #
-# セーブには、保存した時の世界の形 (測量座標の原点と、メッシュの範囲) も入っている。いまの世界と見比べて、
+# セーブには、保存した時の世界の形 (測量座標の原点と、メッシュの範囲。どちらも、そのタイルの座標) も入っている。いまの世界と見比べて、
 #   - 同じなら、そのまま信用する (地面の検査はしない。斜面の途中の篝火を、誤って捨てないため)
 #   - 違えば、作り直された世界。位置は、原点の動きだけ直した上で、地面の上にあるか確かめ、
 #     地面のない所 (範囲の外) や、地面の中 (メッシュを粗くして、地面が上がった時など) なら、使わず、いつもの始まり方にする
 #     (使うと、落ちて、同じ位置へ戻ることを繰り返し、遊べなくなる)
 #   - 確かめた所の地図は、水平の原点と、水平の範囲が同じ時だけ使う (違うと、ずれて重なる。範囲で、画素の間隔も変わる)
-func _apply_save(state: Dictionary, meshes: Array) -> void:
+func _apply_tile_save(tile: Dictionary, state: Dictionary, is_home: bool) -> void:
 	var saved_origin: Variant = SaveGame.decode_vector(state.get("origin"))
-	var origin: Variant = WorldLoader.origin_for(_save_world)
+	var origin: Variant = WorldLoader.origin_for(tile.path)
 	var saved_bounds: Variant = _decode_bounds(state.get("bounds"))
+	var box: AABB = tile.bounds
 	var shift := Vector3.ZERO
 	var same_map := true
 	if saved_origin != null and origin != null:
@@ -354,24 +463,31 @@ func _apply_save(state: Dictionary, meshes: Array) -> void:
 	var unchanged := shift == Vector3.ZERO
 	if saved_bounds != null:
 		var old: AABB = saved_bounds
-		unchanged = unchanged and _same_box(old.position, _bounds.position) and _same_box(old.size, _bounds.size)
-		same_map = same_map and Vector2(old.position.x - _bounds.position.x, old.position.z - _bounds.position.z).length() < FRAME_TOLERANCE \
-			and Vector2(old.size.x - _bounds.size.x, old.size.z - _bounds.size.z).length() < FRAME_TOLERANCE
+		unchanged = unchanged and _same_box(old.position, box.position) and _same_box(old.size, box.size)
+		same_map = same_map and Vector2(old.position.x - box.position.x, old.position.z - box.position.z).length() < FRAME_TOLERANCE \
+			and Vector2(old.size.x - box.size.x, old.size.z - box.size.z).length() < FRAME_TOLERANCE
 	var kept: Variant = state.get("reveal_png") if same_map else null
 	if kept is String:
-		_loaded_reveal = kept
+		tile["loaded_reveal"] = kept
+	tile["visited"] = true
 	var spawn: Variant = SaveGame.decode_vector(state.get("spawn"))
-	if spawn != null and not unchanged and not _is_on_ground(meshes, spawn + shift):
+	if spawn != null and not unchanged and not _is_on_ground(tile.meshes, spawn + shift + tile.offset):
 		spawn = null
 	if spawn != null:
 		spawn += shift
-		player.global_position = spawn
-		player.spawn_position = spawn
-		player.velocity = Vector3.ZERO
-		player.has_rested = true
-	if _points != null:
-		_points.restore_reveal(SaveGame.decode_bytes(kept))
-	_apply_time(state.get("time_total_hours"))
+		tile["spawn_local"] = spawn
+		if tile.fire != null:
+			tile.fire.lit = true  # 休んだことがある篝火は、火が灯っている
+		if is_home:
+			var global_spawn: Vector3 = spawn + tile.offset
+			player.global_position = global_spawn
+			player.spawn_position = global_spawn
+			player.velocity = Vector3.ZERO
+			player.has_rested = true
+	if tile.points != null:
+		tile.points.restore_reveal(SaveGame.decode_bytes(kept))
+	if is_home:
+		_apply_time(state.get("time_total_hours"))
 
 
 # 保存した時刻 (ゲーム全体のもの) を、昼夜に渡す。DayNight は、このあとで始まるので、始まる時に戻される
@@ -408,25 +524,30 @@ func _is_on_ground(meshes: Array, position: Vector3) -> bool:
 	return near and position.y >= ground.y - UNDERGROUND_MARGIN
 
 
-# 続きの状態を保存する。保存できたら true
+# 続きの状態を保存する。保存できたら true。遊んだタイル (始める世界と、入った、休んだ、記録を読んだ、タイル) を、1 度にまとめて書く
 func save_now() -> bool:
 	if not _save_active:
 		return false
-	var state := {"has_rested": player.has_rested}
-	var origin: Variant = WorldLoader.origin_for(_save_world)
-	if origin != null:
-		state["origin"] = SaveGame.encode_vector(origin)  # 位置は、この原点からの値。世界を作り直したら、直すのに使う
-	state["bounds"] = _encode_bounds(_bounds)  # 世界の形。いまの世界と見比べて、作り直されたかを知る
-	if player.has_rested:
-		state["spawn"] = SaveGame.encode_vector(player.spawn_position)
 	var day_night := get_node_or_null("../DayNight")
-	if day_night != null and day_night.time != null and day_night.settings.time_mode == "accelerated":
-		state["time_total_hours"] = day_night.time.total_hours
-	if _points != null:
-		state["reveal_png"] = SaveGame.encode_bytes(_points.reveal.to_png())
-	elif not _loaded_reveal.is_empty():
-		state["reveal_png"] = _loaded_reveal  # 点の表現を切っている間も、保存済みの地図は残す
-	var saved := SaveGame.write(_save_world, state)
+	var items: Array = []
+	for tile in _tiles:
+		if not tile.visited:
+			continue
+		var state := {"has_rested": tile.spawn_local != null}
+		var origin: Variant = WorldLoader.origin_for(tile.path)
+		if origin != null:
+			state["origin"] = SaveGame.encode_vector(origin)  # 位置は、この原点からの値。世界を作り直したら、直すのに使う
+		state["bounds"] = _encode_bounds(tile.bounds)  # 世界の形。いまの世界と見比べて、作り直されたかを知る
+		if tile.spawn_local != null:
+			state["spawn"] = SaveGame.encode_vector(tile.spawn_local)
+		if tile.points != null:
+			state["reveal_png"] = SaveGame.encode_bytes(tile.points.reveal.to_png())
+		elif not tile.loaded_reveal.is_empty():
+			state["reveal_png"] = tile.loaded_reveal  # 点の表現を切っている間も、保存済みの地図は残す
+		items.append({"path": tile.path, "state": state})
+	if day_night != null and day_night.time != null and day_night.settings.time_mode == "accelerated" and not items.is_empty():
+		items[0].state["time_total_hours"] = day_night.time.total_hours
+	var saved := SaveGame.write_many(items, _tiles[_current].path)
 	if not saved:
 		_notify("セーブに失敗しました")
 	return saved

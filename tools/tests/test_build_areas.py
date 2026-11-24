@@ -50,3 +50,25 @@ def test_build_writes_name_credit_bonfire_and_a_stable_id(tmp_path):
     assert meta["world_id"].startswith("08OF3006-") and len(meta["bonfire"]) == 3
     again = ba.build(tmp_path / "raw", tmp_path / "out2", 2, manifest)[0]
     assert json.loads(again.with_suffix(".json").read_text(encoding="utf-8"))["world_id"] == meta["world_id"]
+
+
+@pytest.mark.parametrize("region", [{"id": "", "name": "x"}, {"id": "../x", "name": "x"}, {"id": "ok", "name": " "}, "text"])
+def test_bad_region_is_rejected(tmp_path, region):
+    path = tmp_path / "areas.json"
+    path.write_text(json.dumps({"credit": "c", "license_url": "https://x", "source": "s", "region": region, "areas": [{"tile": "A", "name": "a"}]}))
+    with pytest.raises(ValueError, match="region"):
+        ba.load_manifest(path)
+
+
+def test_region_is_written_to_every_sidecar(tmp_path):
+    manifest = {
+        "credit": "出典",
+        "license_url": "https://example.com/license",
+        "source": "src",
+        "region": {"id": "test-region", "name": "試しの地域"},
+        "areas": [{"tile": "08OF3006", "name": "寒天林道"}],
+    }
+    write_dem(tmp_path / "raw" / "src-08OF3006" / "08OF3006_DEM.txt")
+    output = ba.build(tmp_path / "raw", tmp_path / "out", 1, manifest)[0]
+    meta = json.loads(output.with_suffix(".json").read_text(encoding="utf-8"))
+    assert meta["region"] == "test-region" and meta["region_name"] == "試しの地域"

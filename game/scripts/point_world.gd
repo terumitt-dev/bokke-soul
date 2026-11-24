@@ -39,6 +39,8 @@ var glitch_rect: ColorRect
 var pulse_active := false  # 波が広がっている間
 var pulse_radius := 0.0  # 波の、いまの半径 (m)
 var prev_image: Image  # 波が出る直前の、確かめた所の地図
+# 画面全体のノイズの層を作るか。複数のタイルを並べる時は、1 つの点の表現だけが作る (重ねて、何度も描かない)
+var glitch_overlay := true
 var environment: Environment  # 点だけの方式で、空や霧の明るさに合わせて点の色を決める。渡さなければ、場面の WorldEnvironment を探す
 
 var _meshes: Array = []
@@ -99,7 +101,8 @@ func setup(world: Node3D, player: Node3D, new_mode: Mode = Mode.MESH_AND_POINTS)
 	points_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(points_instance)
 
-	_add_glitch_overlay()
+	if glitch_overlay:
+		_add_glitch_overlay()
 	set_mode(new_mode)
 	_update_colors()
 	reveal_at(player.global_position)
@@ -217,8 +220,9 @@ func _update_effect(delta: float) -> void:
 
 	var glitch_seconds := COLLAPSE_SECONDS if _glitch_target > glitch else GLITCH_FADE_SECONDS
 	glitch = move_toward(glitch, _glitch_target, delta / glitch_seconds)
-	glitch_rect.visible = glitch > 0.0
-	if glitch_rect.visible:
+	if glitch_rect != null:
+		glitch_rect.visible = glitch > 0.0
+	if glitch_rect != null and glitch_rect.visible:
 		var glitch_material := glitch_rect.material as ShaderMaterial
 		glitch_material.set_shader_parameter("intensity", glitch)
 		glitch_material.set_shader_parameter("time_seconds", Time.get_ticks_msec() / 1000.0)
