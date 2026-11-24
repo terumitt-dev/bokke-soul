@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from dem_to_mesh import convert, load_dem
+from dem_to_mesh import convert, find_flat_spot, load_dem
 from pointcloud_to_mesh import apply_credit, apply_name, apply_world_id, write_outputs
 
 MANIFEST = Path(__file__).with_name("areas.json")
@@ -48,17 +48,15 @@ def stitch(grids: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]) -> dict[
     """
     result = {}
     for tile, (xs, ys, z) in grids.items():
-        dx, dy = float(xs[1] - xs[0]), float(ys[1] - ys[0])
-        east = _find(grids, lambda o: np.isclose(o[0][0] - xs[-1], dx, atol=1e-3) and _same_axis(o[1], ys))
-        north = _find(grids, lambda o: np.isclose(o[1][0] - ys[-1], dy, atol=1e-3) and _same_axis(o[0], xs))
+        east = _east_of(grids, tile)
+        north = _north_of(grids, tile)
         if east is not None:
             xs, z = np.append(xs, east[0][0]), np.column_stack([z, east[2][:, 0]])
         if north is not None:
             corner = np.nan
-            if east is not None:
-                diagonal = _find(grids, lambda o: np.isclose(o[0][0], east[0][0], atol=1e-3) and np.isclose(o[1][0], north[1][0], atol=1e-3))
-                if diagonal is not None:
-                    corner = diagonal[2][0, 0]
+            diagonal = _north_of(grids, _name_of(grids, east)) if east is not None else None
+            if diagonal is not None:
+                corner = diagonal[2][0, 0]
             row = north[2][0, :]
             if east is not None:
                 row = np.append(row, corner)
@@ -67,15 +65,50 @@ def stitch(grids: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]) -> dict[
     return result
 
 
-def _find(grids: dict, predicate) -> tuple | None:
-    for grid in grids.values():
-        if predicate(grid):
-            return grid
-    return None
+def _name_of(grids: dict, grid: tuple) -> str:
+    return next(name for name, g in grids.items() if g is grid)
+
+
+def _only(matches: list, tile: str, direction: str) -> tuple | None:
+    if len(matches) > 1:
+        raise ValueError(f"{tile} の {direction}の隣が、2 つ以上あります")
+    return matches[0] if matches else None
+
+
+def _east_of(grids: dict, tile: str) -> tuple | None:
+    """tile の東の隣。格子の間隔が同じで、最初の列が、最後の列の、格子 1 つ先で、行がそろっているもの。"""
+    xs, ys, _ = grids[tile]
+    dx = _spacing(xs)
+    matches = [
+        g for name, g in grids.items()
+        if name != tile and _spacing(g[0]) == dx and _near(g[0][0] - xs[-1], dx) and _same_axis(g[1], ys)
+    ]
+    return _only(matches, tile, "東")
+
+
+def _north_of(grids: dict, tile: str) -> tuple | None:
+    """tile の北の隣。格子の間隔が同じで、最初の行が、最後の行の、格子 1 つ先で、列がそろっているもの。"""
+    xs, ys, _ = grids[tile]
+    dy = _spacing(ys)
+    matches = [
+        g for name, g in grids.items()
+        if name != tile and _spacing(g[1]) == dy and _near(g[1][0] - ys[-1], dy) and _same_axis(g[0], xs)
+    ]
+    return _only(matches, tile, "北")
+
+
+def _spacing(axis: np.ndarray) -> float | None:
+    """格子の間隔 (小数 3 桁まで)。1 つしかない格子は、None (隣と見なさない)。"""
+    return round(float(axis[1] - axis[0]), 3) if len(axis) > 1 else None
+
+
+# 座標は、測量座標で、値が大きい。比べる時は、相対の許容誤差を使わず、距離 (m) だけで見る
+def _near(a: float, b: float) -> bool:
+    return bool(np.isclose(a, b, rtol=0.0, atol=1e-3))
 
 
 def _same_axis(a: np.ndarray, b: np.ndarray) -> bool:
-    return len(a) == len(b) and np.allclose(a, b, atol=1e-3)
+    return len(a) == len(b) and bool(np.allclose(a, b, rtol=0.0, atol=1e-3))
 
 
 def build(raw_root: Path, out_dir: Path, stride: int, manifest: dict | None = None) -> list[Path]:
@@ -83,11 +116,16 @@ def build(raw_root: Path, out_dir: Path, stride: int, manifest: dict | None = No
     sources = {area["tile"]: dem_path(raw_root, manifest, area["tile"]) for area in manifest["areas"]}
     original = {tile: load_dem(path) for tile, path in sources.items()}
     grids = stitch(original)
+    # 全てのタイルに共通の、格子の原点 (東, 北)。同じ格子の線で間引いて、継ぎ目の頂点を、そろえる
+    lattice = (min(g[0][0] for g in original.values()), min(g[1][0] for g in original.values()))
     outputs = []
     for area in manifest["areas"]:
         tile = area["tile"]
         xs, ys, z = grids[tile]
-        mesh = convert(xs, ys, z, stride)
+        # 篝火の場所は、継ぎ目を足す前の、元のタイルで決める (隣のタイルの有無で、場所が動かない)
+        east, north, elevation, slope = find_flat_spot(*original[tile])
+        mesh = convert(xs, ys, z, stride, bonfire=(east, north), lattice=lattice)
+        mesh.metadata["bonfire_slope_deg"] = round(slope, 2)
         apply_credit(mesh, Namespace(credit=manifest["credit"], license_url=manifest["license_url"]))
         apply_name(mesh, Namespace(name=area["name"]))
         if manifest.get("crs"):

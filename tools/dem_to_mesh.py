@@ -116,11 +116,13 @@ def find_flat_spot(
     return float(xs[col]), float(ys[row]), float(z[row, col]), float(np.degrees(np.arctan(rms[row, col])))
 
 
-def sample_indices(count: int, stride: int) -> np.ndarray:
-    """0 番から stride 個おきと、最後 (count - 1 番) の、番号。最後の間隔だけ、stride より短くなることがある。"""
-    indices = list(range(0, count, stride))
-    if indices[-1] != count - 1:
-        indices.append(count - 1)
+def sample_indices(count: int, stride: int, offset: int = 0) -> np.ndarray:
+    """間引いて使う番号。最初と最後は、必ず使う (端が、割り切れ方で欠けない)。その間は、(番号 + offset) が stride の倍数の所。
+
+    offset は、この格子の最初の番号が、全体の格子の何番目か (複数のタイルを、同じ格子の線で間引くため)。
+    隣り合うタイルが、継ぎ目の上の、同じ位置の頂点を持つ (T 字の継ぎ目の隙間ができない)。
+    """
+    indices = [i for i in range(count) if i == 0 or i == count - 1 or (i + offset) % stride == 0]
     return np.array(indices)
 
 
@@ -131,17 +133,21 @@ def convert(
     stride: int = 1,
     bonfire: tuple[float, float] | None = None,
     margin: float = BONFIRE_MARGIN,
+    lattice: tuple[float, float] | None = None,
 ) -> trimesh.Trimesh:
     """格子を stride 個おきに間引いて地形メッシュにし、原点付近へ寄せて Godot の軸にする。
 
     篝火を置く場所 (測量座標の 東, 北, 標高) も、付属情報に入れる。bonfire (東, 北) があればそこ、なければ、平らな場所を探す。
+    lattice (東, 北) は、複数のタイルに共通の、格子の原点。渡すと、全てのタイルが、同じ格子の線で間引かれる (継ぎ目がそろう)。
     """
     if stride < 1:
         raise ValueError("stride は 1 以上にしてください")
     # 篝火の場所は、間引く前の格子で決める (間引きの細かさを変えても、同じ場所になる)
     spot = _bonfire_spot(xs, ys, z, bonfire, margin)
     # 間引いても、最後の列と行は、必ず使う (端が、stride の割り切れ方で、欠けない。隣のタイルとの継ぎ目が、そろう)
-    cols, rows = sample_indices(len(xs), stride), sample_indices(len(ys), stride)
+    offset_x = round((xs[0] - lattice[0]) / (xs[1] - xs[0])) if lattice else 0
+    offset_y = round((ys[0] - lattice[1]) / (ys[1] - ys[0])) if lattice else 0
+    cols, rows = sample_indices(len(xs), stride, offset_x), sample_indices(len(ys), stride, offset_y)
     xs, ys, z = xs[cols], ys[rows], z[np.ix_(rows, cols)]
     mesh = heightfield_mesh(xs, ys, z)
     # 測量の座標は値が大きいので、float32 の精度落ちを避けて、最小値を原点にする

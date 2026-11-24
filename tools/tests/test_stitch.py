@@ -9,12 +9,15 @@ import dem_to_mesh as d2m
 SPACING = 1.0
 
 
-def make_grid(x0, y0, nx=40, ny=30):
-    """東西 nx、南北 ny 個の格子 (間隔 1 m)。標高は、位置の関数なので、隣のタイルとも、連続する。"""
+def make_grid(x0, y0, nx=40, ny=30, relief=False):
+    """東西 nx、南北 ny 個の格子 (間隔 1 m)。標高は、位置の関数なので、隣のタイルとも、連続する。relief なら起伏がある。"""
     xs = x0 + np.arange(nx) * SPACING
     ys = y0 + np.arange(ny) * SPACING
     gx, gy = np.meshgrid(xs, ys)
-    return xs, ys, 100.0 + 0.1 * gx + 0.05 * gy
+    z = 100.0 + 0.1 * gx + 0.05 * gy
+    if relief:
+        z = z + 5.0 * np.sin(0.3 * gx) * np.cos(0.2 * gy)
+    return xs, ys, z
 
 
 def write_dem(root, source, tile, grid):
@@ -24,15 +27,17 @@ def write_dem(root, source, tile, grid):
     path.write_text("\n".join(f"{x} {y} {z[j, i]}" for j, y in enumerate(ys) for i, x in enumerate(xs)) + "\n")
 
 
-def layout():
+def layout(relief=False, diagonal=True):
     """中心 C と、東 E、北 N、北東 D (斜め) のタイル。格子は、隙間なく、つながっている。"""
-    c = make_grid(0.0, 0.0)
-    return {
+    c = make_grid(0.0, 0.0, relief=relief)
+    tiles = {
         "C": c,
-        "E": make_grid(c[0][-1] + SPACING, 0.0),
-        "N": make_grid(0.0, c[1][-1] + SPACING),
-        "D": make_grid(c[0][-1] + SPACING, c[1][-1] + SPACING),
+        "E": make_grid(c[0][-1] + SPACING, 0.0, relief=relief),
+        "N": make_grid(0.0, c[1][-1] + SPACING, relief=relief),
     }
+    if diagonal:
+        tiles["D"] = make_grid(c[0][-1] + SPACING, c[1][-1] + SPACING, relief=relief)
+    return tiles
 
 
 def test_east_and_north_neighbours_are_appended():
@@ -110,3 +115,94 @@ def test_world_id_does_not_change_by_stitching(tmp_path):
     alone = ba.build(root, tmp_path / "a", 2, {**base, "areas": [{"tile": "C", "name": "c"}]})[0]
     together = ba.build(root, tmp_path / "b", 2, {**base, "areas": [{"tile": t, "name": t} for t in grids]})[0]
     assert json.loads(alone.with_suffix(".json").read_text(encoding="utf-8"))["world_id"] == json.loads(together.with_suffix(".json").read_text(encoding="utf-8"))["world_id"]
+
+
+def manifest_for(tiles):
+    return {
+        "credit": "c",
+        "license_url": "https://x",
+        "source": "src",
+        "areas": [{"tile": t, "name": f"area-{t}"} for t in tiles],
+    }
+
+
+def seam_vertices(sidecar_path, glb_path, east_of_origin=None, local_x=None):
+    """GLB の頂点を、測量座標 (東, 北, 標高) に直して返す。"""
+    import trimesh
+
+    meta = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    vertices = np.asarray(trimesh.load(glb_path, force="mesh").vertices, dtype=float)
+    origin = np.array(meta["origin"])
+    return np.column_stack([vertices[:, 0] + origin[0], -vertices[:, 2] + origin[1], vertices[:, 1] + origin[2]])
+
+
+@pytest.mark.parametrize("stride", [2, 3])
+def test_seam_vertices_match_even_when_row_counts_differ(tmp_path, stride):
+    # 起伏のある標高で、継ぎ目の上の頂点が、両側で、同じ位置・同じ標高になること (T 字の継ぎ目の隙間が、できない)。
+    # C は北の隣があって行が 1 つ多く、E には北の隣がない (行数が違う)
+    root = tmp_path / "raw"
+    grids = layout(relief=True, diagonal=False)
+    for tile, grid in grids.items():
+        write_dem(root, "src", tile, grid)
+    outputs = ba.build(root, tmp_path / "out", stride, manifest_for(grids))
+    by_name = {o.stem: o for o in outputs}
+    seam_e = grids["E"][0][0]
+    on_seam = {}
+    for tile in ("C", "E"):
+        vertices = seam_vertices(by_name[tile].with_suffix(".json"), by_name[tile])
+        on_seam[tile] = vertices[np.isclose(vertices[:, 0], seam_e, atol=1e-6)]
+    # E の北の端 (最後の行) は、C の格子の線に乗らないことがある (C は、その先まで続く)。そこだけは、継ぎ目の端なので、比べない
+    top = grids["E"][1][-1]
+    c = {round(n, 6): e for _, n, e in on_seam["C"] if n < top - 1e-9}
+    e = {round(n, 6): h for _, n, h in on_seam["E"] if n < top - 1e-9}
+    assert set(c) == set(e), f"継ぎ目の頂点の位置が、食い違う: C だけ {sorted(set(c) - set(e))}、E だけ {sorted(set(e) - set(c))}"
+    assert all(abs(c[n] - e[n]) < 1e-6 for n in c)  # 標高も同じ
+
+
+def test_bonfire_does_not_move_when_neighbours_are_added(tmp_path):
+    root = tmp_path / "raw"
+    grids = layout(relief=True)
+    for tile, grid in grids.items():
+        write_dem(root, "src", tile, grid)
+    alone = ba.build(root, tmp_path / "a", 2, manifest_for(["C"]))[0]
+    together = ba.build(root, tmp_path / "b", 2, manifest_for(grids))[0]
+    a = json.loads(alone.with_suffix(".json").read_text(encoding="utf-8"))
+    b = json.loads(together.with_suffix(".json").read_text(encoding="utf-8"))
+    assert a["bonfire"] == b["bonfire"] and a["bonfire_slope_deg"] == b["bonfire_slope_deg"]
+
+
+def test_only_one_neighbour_is_added():
+    c = make_grid(0.0, 0.0)
+    east_only = ba.stitch({"C": c, "E": make_grid(c[0][-1] + SPACING, 0.0)})["C"]
+    assert len(east_only[0]) == len(c[0]) + 1 and len(east_only[1]) == len(c[1])
+    north_only = ba.stitch({"C": c, "N": make_grid(0.0, c[1][-1] + SPACING)})["C"]
+    assert len(north_only[1]) == len(c[1]) + 1 and len(north_only[0]) == len(c[0])
+
+
+def test_large_survey_coordinates_use_absolute_tolerance():
+    # 測量座標の値が大きいと、相対の許容誤差が、0.5 m のずれを、許してしまう。距離 (m) だけで見る
+    c = make_grid(42400.25, -129299.75)
+    shifted = make_grid(c[0][-1] + SPACING, -129299.75 + 0.5)  # 南北が 0.5 m ずれている
+    assert ba.stitch({"C": c, "X": shifted})["C"][2].shape == c[2].shape
+    aligned = make_grid(c[0][-1] + SPACING, -129299.75)
+    assert ba.stitch({"C": c, "X": aligned})["C"][2].shape[1] == c[2].shape[1] + 1
+
+
+def test_unusual_neighbours():
+    c = make_grid(0.0, 0.0)
+    coarse = (c[0][-1] + 2.0 + np.arange(40) * 2.0, c[1], np.zeros((30, 40)))  # 間隔が違う
+    assert ba.stitch({"C": c, "X": coarse})["C"][2].shape == c[2].shape
+    single = (np.array([c[0][-1] + SPACING]), c[1], np.zeros((30, 1)))  # 1 列だけ (間隔が分からない)
+    assert ba.stitch({"C": c, "X": single})["C"][2].shape == c[2].shape  # 落ちずに、足さない
+    twin_a = make_grid(c[0][-1] + SPACING, 0.0)
+    twin_b = make_grid(c[0][-1] + SPACING, 0.0)
+    with pytest.raises(ValueError, match="2 つ以上"):
+        ba.stitch({"C": c, "A": twin_a, "B": twin_b})
+
+
+def test_sampling_uses_one_lattice_across_tiles():
+    # 全体の格子の線に合わせて間引く。2 つのタイルの、継ぎ目の両側が、同じ番号の線を使う
+    left = d2m.sample_indices(10, 3, 0)  # 全体の 0〜9 番
+    right = d2m.sample_indices(10, 3, 9)  # 全体の 9〜18 番 (9 番は、継ぎ目で、共有)
+    assert set(left + 0) & set(right + 9) == {9}
+    assert all((i + 9) % 3 == 0 or i in (0, 9) for i in right)
