@@ -23,6 +23,8 @@ const SAVE_RETRY_MS := 3000  # 保存に失敗して、移るのをやめた時�
 const FADE_SECONDS := 0.4
 const GAME_SCENE := "res://scenes/world_local.tscn"
 const MAX_REGION_TILES := 16  # 1 つの地域で、まとめて読み込むタイルの数の上限 (既定)
+const COLLISION_STRIPS := 10  # あとから読み込むタイルの当たり判定を、いくつに分けて作るか (1 つずつ、フレームをあけて作り、画面を止めない)
+const STREAM_INTERVAL := 0.3  # 地域の残りのタイルを、1 つ読み込むごとに、あける時間 (秒)。歩きながら、少しずつ読み込む
 const FALL_MARGIN := 20.0  # 地域でいちばん低い地面から、これだけ下まで落ちたら、位置を見失う (m)
 const NOTICE_SECONDS := 3.0  # 保存に失敗した知らせを出しておく時間 (休んだ知らせより長い)
 const CLOSE_HOLD_SECONDS := 8.0  # 閉じる時に保存に失敗した時、終了を保留しておく時間
@@ -38,6 +40,8 @@ var auto_change_scene := true
 var max_tiles := MAX_REGION_TILES
 
 signal traveled(path: String)
+signal tile_loaded(tile_name: String)  # 地域のタイルを 1 つ読み込み終えた
+signal region_loaded  # 地域のタイルを、全て読み込み終えた
 
 @onready var player: CharacterBody3D = get_node("../Player")
 @onready var message: Label = get_node("../HUD/Message")
@@ -46,6 +50,9 @@ signal traveled(path: String)
 #   path, entry (一覧での情報)、offset (始める世界から見た位置)、world (世界のノード)、meshes、bounds (そのタイルの座標での範囲)、
 #   fire (篝火)、points (点の表現)、loaded_reveal (保存から読んだ、確かめた所の地図。点の表現が無効な間も、保存に引き継ぐ)、
 #   spawn_local (最後に休んだ位置。そのタイルの座標。なければ null)、visited (遊んだか。遊んだタイルだけ保存する)
+var _planned_ids := {}  # 読み込む予定のタイルの世界の名前 (まだ読み込んでいないものも)。これらの間は、歩いて渡れる (関所ではない)
+var _pending: Array[Dictionary] = []  # まだ読み込んでいないタイル (始める世界から近い順)
+var _streaming := false
 var _tiles: Array[Dictionary] = []
 var _current := 0  # いま、プレイヤーがいるタイル
 var _entries: Array[Dictionary] = []  # 置き場の、遊べるマップの一覧
@@ -81,15 +88,16 @@ func _ready() -> void:
 				break
 			if other.region == home_entry.region and other.world_id != home_entry.world_id:
 				plan.append({"path": other.path, "entry": other, "offset": WorldRegistry.convert_position(other, home_entry, Vector3.ZERO)})
-	for i in plan.size():
-		var tile := _load_tile(plan[i], i == 0)
-		if tile.is_empty():
-			if i == 0:
-				return  # 始める世界が読めない (_load_tile が、知らせた)
-			continue
-		_tiles.append(tile)
-	var home := _tiles[0]
+	for item in plan:
+		_planned_ids[item.entry.get("world_id", "")] = true
+	var home := _load_tile(plan[0], true)
+	if home.is_empty():
+		return  # 始める世界が読めない (_load_tile が、知らせた)
+	_tiles.append(home)
 	_bounds = home.bounds
+	# 残りのタイルは、始める世界から近い順に、あとで、歩きながら読み込む (始めるまでの待ちを、始める世界の分だけにする)
+	_pending.assign(plan.slice(1))
+	_pending.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return (a.offset as Vector3).length() < (b.offset as Vector3).length())
 
 	# 始める世界の篝火 (データの .json の bonfire) があれば、そこから始まる。
 	# なければ、世界の中央に一番近い地面の上空から降りて、すぐ前に篝火を置く (中央に穴があっても、地面のある所に降りる)
@@ -103,28 +111,117 @@ func _ready() -> void:
 		player.global_position = start
 		player.spawn_position = start
 		home["fire"] = _add_start_bonfire(home.meshes, start)  # 始まりの篝火も、タイルの篝火として、火の状態を持つ
-
-	# 落ちた、と見なす高さ: 地域でいちばん低い地面の下。標高の低いタイルへ歩いて降りただけで、位置を見失わないように
-	# 篝火の場所がない (または、作り直した世界で、使えない) 始める世界以外のタイルにも、代わりの篝火を置く
-	# (歩いて入ったタイルでも、休んで、復帰地点を決められる。始める場所によって、篝火の有無が変わらない)
-	for i in range(1, _tiles.size()):
-		if _tiles[i].fire == null:
-			var center: Vector3 = _tiles[i].bounds.get_center() + _tiles[i].offset
-			_tiles[i]["fire"] = _add_start_bonfire(_tiles[i].meshes, WorldLoader.pick_start(_tiles[i].meshes, center), "StartBonfire_" + _tiles[i].path.get_file().get_basename())
-
-	var lowest := INF
-	for tile in _tiles:
-		lowest = minf(lowest, tile.offset.y + tile.bounds.position.y)
-	player.fall_limit = minf(player.fall_limit, lowest - FALL_MARGIN)  # 既定 (-20) より高くはしない
+	_update_fall_limit()
 
 	_place_arrival(home.meshes)
 	_setup_points_position = player.global_position  # テスト用: 探索地図を作る時の、プレイヤーの位置
-	for i in _tiles.size():
-		_tiles[i]["points"] = _add_points(_tiles[i].world, i == 0)
+	home["points"] = _add_points(home.world, true)
 	_points = home.points
 	_setup_save()
 	_update_current(true)
 	_finish_arrival()
+	if not _pending.is_empty():
+		_stream_tiles()
+
+
+# 地域の残りのタイルを、1 つずつ読み込む。読み込みは、数百ミリ秒、画面が止まるので、あけて (STREAM_INTERVAL)、
+# その間は、歩ける。読み込んだタイルは、篝火、点の表現、セーブの記録を付けて、つなぐ
+func _stream_tiles() -> void:
+	_streaming = true
+	while not _pending.is_empty():
+		await get_tree().create_timer(STREAM_INTERVAL).timeout
+		if not is_inside_tree() or _pending.is_empty():
+			break
+		var tile := _load_tile(_pending.pop_front(), false)
+		if tile.is_empty():
+			continue
+		await _build_collision(tile.meshes)
+		_tiles.append(tile)
+		_attach_tile(tile)
+	_streaming = false
+	region_loaded.emit()
+
+
+# 当たり判定 (面ごとの三角形の形) を、少しずつ作る。三角形を、東西に COLLISION_STRIPS 本の帯に分ける作業は、別のスレッドで行い、
+# 帯ごとの形は、1 フレームに 1 つずつ作る (24 万の三角形を、1 度に作ると、数百ミリ秒、画面が止まる)
+func _build_collision(meshes: Array) -> void:
+	for mesh: MeshInstance3D in meshes:
+		var task := WorkerThreadPool.add_task(_split_faces.bind(mesh.mesh))
+		while not WorkerThreadPool.is_task_completed(task):
+			await get_tree().process_frame
+		WorkerThreadPool.wait_for_task_completion(task)
+		var strips := _strips
+		_strips = []
+		if not is_instance_valid(mesh) or not mesh.is_inside_tree():
+			return
+		var body := StaticBody3D.new()
+		mesh.add_child(body)
+		for faces: PackedVector3Array in strips:
+			if faces.is_empty():
+				continue
+			var shape := ConcavePolygonShape3D.new()
+			shape.set_faces(faces)
+			var collider := CollisionShape3D.new()
+			collider.shape = shape
+			body.add_child(collider)
+			await get_tree().process_frame
+
+
+# 別のスレッドで、メッシュの三角形を、x (東西) の帯に分ける。結果は _strips に入れる
+var _strips: Array = []
+func _split_faces(mesh: Mesh) -> void:
+	var faces := mesh.get_faces()
+	var low := INF
+	var high := -INF
+	for vertex in faces:
+		low = minf(low, vertex.x)
+		high = maxf(high, vertex.x)
+	var width := maxf(high - low, 0.001)
+	var strips: Array = []
+	for i in COLLISION_STRIPS:
+		strips.append(PackedVector3Array())
+	for i in range(0, faces.size() - 2, 3):
+		var center_x := (faces[i].x + faces[i + 1].x + faces[i + 2].x) / 3.0
+		var strip: PackedVector3Array = strips[clampi(int((center_x - low) / width * COLLISION_STRIPS), 0, COLLISION_STRIPS - 1)]
+		strip.append(faces[i])
+		strip.append(faces[i + 1])
+		strip.append(faces[i + 2])
+	_strips = strips
+
+
+# 地域のタイルを全て読み込み終えたか (読み込み中でなく、残りもない)
+func is_region_loaded() -> bool:
+	return _pending.is_empty() and not _streaming
+
+
+# 読み込んだ、始める世界以外のタイルに、篝火、点の表現、セーブの記録を付ける
+func _attach_tile(tile: Dictionary) -> void:
+	# 篝火の場所がない (または、作り直した世界で、使えない) タイルにも、代わりの篝火を置く
+	# (歩いて入ったタイルでも、休んで、復帰地点を決められる。始める場所によって、篝火の有無が変わらない)
+	if tile.fire == null:
+		var center: Vector3 = tile.bounds.get_center() + tile.offset
+		tile["fire"] = _add_start_bonfire(tile.meshes, WorldLoader.pick_start(tile.meshes, center), "StartBonfire_" + tile.path.get_file().get_basename())
+	_update_fall_limit()
+	tile["points"] = _add_points(tile.world, false)
+	if _save_active:
+		var result := SaveGame.read(tile.path)
+		if result.status == "unavailable":
+			# このタイルの古いセーブを、新しい形に直せなかった。復元しないまま、そのタイルで保存して、古い進行を置き換えないよう、保存せずに遊ぶ
+			push_warning("隣のタイルの古いセーブを読み込めなかったので、保存しません: " + tile.path)
+			_save_active = false
+			_notify("古いセーブを読み込めませんでした。このあいだは、保存しません")
+		elif result.status == "ok":
+			_apply_tile_save(tile, result.state, false)
+	tile_loaded.emit(tile.entry.get("name", ""))
+
+
+# 落ちた、と見なす高さ: 読み込んだタイルのうち、いちばん低い地面の下。標高の低いタイルへ歩いて降りただけで、位置を見失わないように。
+# タイルを読み込むたびに、決め直す (低くなる方へだけ動く)
+func _update_fall_limit() -> void:
+	var lowest := INF
+	for tile in _tiles:
+		lowest = minf(lowest, tile.offset.y + tile.bounds.position.y)
+	player.fall_limit = minf(player.fall_limit, lowest - FALL_MARGIN)  # 既定 (-20) より高くはしない
 
 
 # 1 つのタイルを読み込む: 世界、当たり判定、篝火。読めなければ、空 (始める世界なら、画面に知らせる)
@@ -146,14 +243,15 @@ func _load_tile(plan: Dictionary, is_home: bool) -> Dictionary:
 	var bounds := AABB()
 	for i in meshes.size():
 		var mesh: MeshInstance3D = meshes[i]
-		mesh.create_trimesh_collision()
+		if is_home:
+			mesh.create_trimesh_collision()  # 始める世界は、すぐ立つので、ここで作る (あとから読み込むタイルは、_build_collision で、少しずつ作る)
 		var box := mesh.global_transform * mesh.get_aabb()
 		bounds = box if i == 0 else bounds.merge(box)
 	bounds.position -= offset  # そのタイルの座標での範囲にする (セーブに入れる範囲は、そのタイルの座標)
 	return {
 		"path": plan.path, "entry": plan.entry, "offset": offset, "world": world, "meshes": meshes, "bounds": bounds,
 		"fire": _add_area_bonfire(plan.path, meshes, offset), "points": null, "loaded_reveal": "", "spawn_local": null,
-		"visited": is_home,
+		"visited": is_home, "dirty": true, "state_cache": null, "saved_revision": -2, "encoded": 0,
 	}
 
 
@@ -184,18 +282,15 @@ func _update_current(first := false) -> void:
 		_notify(_entry.name)  # 入ったタイルの名前
 
 
-# 関所: entry のタイルの端から行ける、読み込んでいないマップ。読み込んだタイル (同じ地域) は、歩いて渡れるので、関所ではない
+# 関所: entry のタイルの端から行ける、読み込まないマップ。読み込む予定のタイル (同じ地域。読み込み中を含む) は、歩いて渡れるので、関所ではない
 # (地域のタイルが多くて、読み込みの上限で外れた隣は、関所として、場面を切り替えて移る)
 func _gates_of(entry: Dictionary) -> Dictionary:
 	var gates := {}
 	if entry.is_empty():
 		return gates
-	var loaded := {}
-	for tile in _tiles:
-		loaded[tile.entry.get("world_id", "")] = true
 	var near := WorldRegistry.neighbors(_entries, entry)
 	for direction: String in near:
-		if not loaded.has(near[direction].world_id):
+		if not _planned_ids.has(near[direction].world_id):  # 読み込む予定 (読み込み中を含む) のタイルは、関所ではない
 			gates[direction] = near[direction]
 	return gates
 
@@ -431,16 +526,6 @@ func _setup_save() -> void:
 		_apply_tile_save(_tiles[0], result.state, true)
 	else:
 		_apply_time(result.game.get("time_total_hours"))  # 初めて訪れるエリアでも、時刻は続く
-	for i in range(1, _tiles.size()):
-		var other := SaveGame.read(_tiles[i].path)
-		if other.status == "unavailable":
-			# このタイルの古いセーブを、新しい形に直せなかった。復元しないまま、そのタイルで保存して、古い進行を置き換えないよう、保存せずに遊ぶ
-			push_warning("隣のタイルの古いセーブを読み込めなかったので、保存しません: " + _tiles[i].path)
-			_save_active = false
-			_notify.call_deferred("古いセーブを読み込めませんでした。このあいだは、保存しません")
-			return
-		if other.status == "ok":
-			_apply_tile_save(_tiles[i], other.state, false)
 	player.rested.connect(_on_rested)
 
 
@@ -450,6 +535,7 @@ func _on_rested(position: Vector3) -> void:
 	if not tile.is_empty():
 		tile["spawn_local"] = player.spawn_position - tile.offset
 		tile["visited"] = true
+		tile["dirty"] = true
 		if tile.fire != null:
 			tile.fire.lit = true
 	save_now()
@@ -500,6 +586,7 @@ func _apply_tile_save(tile: Dictionary, state: Dictionary, is_home: bool) -> voi
 	if kept is String:
 		tile["loaded_reveal"] = kept
 	tile["visited"] = true
+	tile["dirty"] = true
 	var spawn: Variant = SaveGame.decode_vector(state.get("spawn"))
 	if spawn != null and not unchanged and not _is_on_ground(tile.meshes, spawn + shift + tile.offset):
 		spawn = null
@@ -554,6 +641,30 @@ func _is_on_ground(meshes: Array, position: Vector3) -> bool:
 	return near and position.y >= ground.y - UNDERGROUND_MARGIN
 
 
+# タイルの記録 (保存する内容)。探索地図 (PNG にする処理が重い) は、前回から変わっていなければ、前回のものを使い回す。
+# 変わったかは、探索地図の revision と、休んだ・記録を読んだ印 (dirty) で分かる
+func _tile_state(tile: Dictionary) -> Dictionary:
+	var revision: int = tile.points.reveal.revision if tile.points != null else -1
+	if tile.state_cache != null and not tile.dirty and revision == tile.saved_revision:
+		return tile.state_cache
+	var state := {"has_rested": tile.spawn_local != null}
+	var origin: Variant = WorldLoader.origin_for(tile.path)
+	if origin != null:
+		state["origin"] = SaveGame.encode_vector(origin)  # 位置は、この原点からの値。世界を作り直したら、直すのに使う
+	state["bounds"] = _encode_bounds(tile.bounds)  # 世界の形。いまの世界と見比べて、作り直されたかを知る
+	if tile.spawn_local != null:
+		state["spawn"] = SaveGame.encode_vector(tile.spawn_local)
+	if tile.points != null:
+		state["reveal_png"] = SaveGame.encode_bytes(tile.points.reveal.to_png())
+		tile["encoded"] += 1
+	elif not tile.loaded_reveal.is_empty():
+		state["reveal_png"] = tile.loaded_reveal  # 点の表現を切っている間も、保存済みの地図は残す
+	tile["state_cache"] = state
+	tile["saved_revision"] = revision
+	tile["dirty"] = false
+	return state
+
+
 # 続きの状態を保存する。保存できたら true。遊んだタイル (始める世界と、入った、休んだ、記録を読んだ、タイル) を、1 度にまとめて書く
 func save_now() -> bool:
 	if not _save_active:
@@ -561,21 +672,10 @@ func save_now() -> bool:
 	var day_night := get_node_or_null("../DayNight")
 	var items: Array = []
 	for tile in _tiles:
-		if not tile.visited:
-			continue
-		var state := {"has_rested": tile.spawn_local != null}
-		var origin: Variant = WorldLoader.origin_for(tile.path)
-		if origin != null:
-			state["origin"] = SaveGame.encode_vector(origin)  # 位置は、この原点からの値。世界を作り直したら、直すのに使う
-		state["bounds"] = _encode_bounds(tile.bounds)  # 世界の形。いまの世界と見比べて、作り直されたかを知る
-		if tile.spawn_local != null:
-			state["spawn"] = SaveGame.encode_vector(tile.spawn_local)
-		if tile.points != null:
-			state["reveal_png"] = SaveGame.encode_bytes(tile.points.reveal.to_png())
-		elif not tile.loaded_reveal.is_empty():
-			state["reveal_png"] = tile.loaded_reveal  # 点の表現を切っている間も、保存済みの地図は残す
-		items.append({"path": tile.path, "state": state})
+		if tile.visited:
+			items.append({"path": tile.path, "state": _tile_state(tile)})
 	if day_night != null and day_night.time != null and day_night.settings.time_mode == "accelerated" and not items.is_empty():
+		items[0]["state"] = (items[0].state as Dictionary).duplicate()  # 前回の記録 (キャッシュ) を、書き換えない
 		items[0].state["time_total_hours"] = day_night.time.total_hours
 	var saved := SaveGame.write_many(items, _tiles[_current].path)
 	if not saved:
