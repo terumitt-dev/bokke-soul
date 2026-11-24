@@ -8,6 +8,7 @@
 
 import argparse
 import json
+import re
 from argparse import Namespace
 from pathlib import Path
 
@@ -25,6 +26,11 @@ def load_manifest(path: Path = MANIFEST) -> dict:
     areas = manifest["areas"]
     if not areas:
         raise ValueError("areas が空です")
+    region = manifest.get("region")
+    if region is not None:
+        pattern = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}")  # 世界の名前と同じ決まり (ゲームが読む)
+        if not isinstance(region, dict) or not pattern.fullmatch(str(region.get("id", ""))) or not str(region.get("name", "")).strip():
+            raise ValueError("region には、id (英数字と . _ - の 64 文字まで) と、name が要ります")
     for key in ("tile", "name"):
         values = [area.get(key, "").strip() for area in areas]
         if not all(values):
@@ -130,6 +136,10 @@ def build(raw_root: Path, out_dir: Path, stride: int, manifest: dict | None = No
         apply_name(mesh, Namespace(name=area["name"]))
         if manifest.get("crs"):
             mesh.metadata["crs"] = manifest["crs"]
+        if manifest.get("region"):
+            # 同じ地域のタイルは、ゲームが、まとめて読み込んで、並べる
+            mesh.metadata["region"] = manifest["region"]["id"]
+            mesh.metadata["region_name"] = manifest["region"]["name"]
         # 世界の名前は、継ぎ目を閉じる前の、元のタイルの南西の角から決める (継ぎ目を足しても、変わらない)
         apply_world_id(mesh, Namespace(world_id=None), sources[tile], np.array([original[tile][0][0], original[tile][1][0]]))
         output = out_dir / f"{tile}.glb"

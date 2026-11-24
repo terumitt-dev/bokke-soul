@@ -102,3 +102,9 @@ steps:
     image: barichello/godot-ci:4.7.2
     commands:
       - sh game/tests/run.sh map_exit_test
+
+  # 地域 (同じ region のマップを、まとめて読み込んで並べる。タイルの間を歩いて渡る、タイルごとの篝火と記録、関所) の動作テスト
+  - name: region-test
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - sh game/tests/run.sh region_test

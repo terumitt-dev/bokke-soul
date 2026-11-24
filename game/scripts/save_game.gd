@@ -61,9 +61,15 @@ static func exists(world_path: String) -> bool:
 # その世界 (エリア) の記録を保存する。state は、位置などの項目。ゲーム全体の項目 (時刻) も、ここで一緒に渡す。
 # 新しいバージョンのセーブが、すでにあれば、上書きせず false を返す
 static func write(world_path: String, state: Dictionary) -> bool:
-	if not enabled():
+	return write_many([{"path": world_path, "state": state}], world_path)
+
+
+# 複数の世界 (エリア) の記録を、1 度で保存する (地域の、複数のタイルを、まとめて。途中までしか、書けない状態にならない)。
+# items は [{"path": 世界の場所, "state": 記録}]。current_path が、最後に遊んだエリア (空なら、最後の items)
+static func write_many(items: Array, current_path: String = "") -> bool:
+	if not enabled() or items.is_empty():
 		return false
-	var path := path_for(world_path)
+	var path := path_for()
 	if FileAccess.file_exists(path) and _stored_version(path) > VERSION:
 		push_warning("新しいバージョンのセーブがあるので、上書きしません: " + path)
 		return false
@@ -71,15 +77,16 @@ static func write(world_path: String, state: Dictionary) -> bool:
 	if not _adopt_v1_game_file():
 		push_warning("古いセーブ (game.json) を新しい形に直せなかったので、保存しません: " + path)
 		return false
-	var document := _load_document(world_path)
-	var area := state.duplicate()
-	for key: String in GAME_KEYS:
-		if area.has(key):
-			document[key] = area[key]
-			area.erase(key)
+	var document := _load_document(items[0].path)
 	var areas: Dictionary = document.areas
-	areas[world_id(world_path)] = area
-	document["current_area"] = world_id(world_path)  # 最後に遊んだエリア。「つづきから」で、そこから始めるため
+	for item: Dictionary in items:
+		var area: Dictionary = (item.state as Dictionary).duplicate()
+		for key: String in GAME_KEYS:
+			if area.has(key):
+				document[key] = area[key]
+				area.erase(key)
+		areas[world_id(item.path)] = area
+	document["current_area"] = world_id(current_path if not current_path.is_empty() else items[items.size() - 1].path)  # 最後に遊んだエリア。「つづきから」で、そこから始めるため
 	return _write_document(document)
 
 
