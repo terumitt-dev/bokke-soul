@@ -22,7 +22,8 @@ const EXIT_COOLDOWN_MS := 1500  # 着いてから、出口が効くまでの時�
 const SAVE_RETRY_MS := 3000  # 保存に失敗して、移るのをやめた時に、もう一度試すまでの時間
 const FADE_SECONDS := 0.4
 const GAME_SCENE := "res://scenes/world_local.tscn"
-const MAX_REGION_TILES := 16  # 1 つの地域で、まとめて読み込むタイルの数の上限
+const MAX_REGION_TILES := 16  # 1 つの地域で、まとめて読み込むタイルの数の上限 (既定)
+const FALL_MARGIN := 20.0  # 地域でいちばん低い地面から、これだけ下まで落ちたら、位置を見失う (m)
 const NOTICE_SECONDS := 3.0  # 保存に失敗した知らせを出しておく時間 (休んだ知らせより長い)
 const CLOSE_HOLD_SECONDS := 8.0  # 閉じる時に保存に失敗した時、終了を保留しておく時間
 
@@ -33,6 +34,8 @@ const CLOSE_HOLD_SECONDS := 8.0  # 閉じる時に保存に失敗した時、終
 @export var save_enabled := true
 # 出口で、実際に場面を切り替えるか。テストでは、切り替えずに、引き継ぎ (WorldLoader.arrival) だけを確かめる
 var auto_change_scene := true
+# 地域で、まとめて読み込むタイルの数の上限。テストでは、小さくして、読み込まなかった隣へ移れることを確かめる
+var max_tiles := MAX_REGION_TILES
 
 signal traveled(path: String)
 
@@ -73,8 +76,8 @@ func _ready() -> void:
 	var plan: Array[Dictionary] = [{"path": _path, "entry": home_entry, "offset": Vector3.ZERO}]
 	if not home_entry.is_empty() and home_entry.region != "":
 		for other in _entries:
-			if plan.size() >= MAX_REGION_TILES:
-				push_warning("地域のタイルが多すぎるので、%d 個までにします" % MAX_REGION_TILES)
+			if plan.size() >= max_tiles:
+				push_warning("地域のタイルが多すぎるので、%d 個までにします。残りの隣へは、関所で移ります" % max_tiles)
 				break
 			if other.region == home_entry.region and other.world_id != home_entry.world_id:
 				plan.append({"path": other.path, "entry": other, "offset": WorldRegistry.convert_position(other, home_entry, Vector3.ZERO)})
@@ -99,7 +102,13 @@ func _ready() -> void:
 		start.y += START_HEIGHT
 		player.global_position = start
 		player.spawn_position = start
-		_add_start_bonfire(home.meshes, start)
+		home["fire"] = _add_start_bonfire(home.meshes, start)  # 始まりの篝火も、タイルの篝火として、火の状態を持つ
+
+	# 落ちた、と見なす高さ: 地域でいちばん低い地面の下。標高の低いタイルへ歩いて降りただけで、位置を見失わないように
+	var lowest := INF
+	for tile in _tiles:
+		lowest = minf(lowest, tile.offset.y + tile.bounds.position.y)
+	player.fall_limit = minf(player.fall_limit, lowest - FALL_MARGIN)  # 既定 (-20) より高くはしない
 
 	_place_arrival(home.meshes)
 	_setup_points_position = player.global_position  # テスト用: 探索地図を作る時の、プレイヤーの位置
@@ -152,12 +161,11 @@ func _entry_by_id(id: String) -> Dictionary:
 # そのタイルを、遊んだことにする (遊んだタイルだけ保存する)。first は、始まった時 (名前の知らせは出さない)
 func _update_current(first := false) -> void:
 	var index := _current
-	for i in _tiles.size():
-		var local: Vector3 = player.global_position - _tiles[i].offset
-		var box: AABB = _tiles[i].bounds
-		if local.x >= box.position.x and local.x <= box.end.x and local.z >= box.position.z and local.z <= box.end.z:
-			index = i
-			break
+	if first or not _contains_xz(_tiles[_current], player.global_position):  # いまのタイルの中なら、そのまま (継ぎ目の線の上で、切り替わらない)
+		for i in _tiles.size():
+			if _contains_xz(_tiles[i], player.global_position):
+				index = i
+				break
 	if not first and index == _current:
 		return
 	_current = index
@@ -169,16 +177,19 @@ func _update_current(first := false) -> void:
 		_notify(_entry.name)  # 入ったタイルの名前
 
 
-# 関所: entry のタイルの端から行ける、別の地域のマップ。同じ地域のマップは、歩いて渡れるので、関所ではない
+# 関所: entry のタイルの端から行ける、読み込んでいないマップ。読み込んだタイル (同じ地域) は、歩いて渡れるので、関所ではない
+# (地域のタイルが多くて、読み込みの上限で外れた隣は、関所として、場面を切り替えて移る)
 func _gates_of(entry: Dictionary) -> Dictionary:
 	var gates := {}
 	if entry.is_empty():
 		return gates
+	var loaded := {}
+	for tile in _tiles:
+		loaded[tile.entry.get("world_id", "")] = true
 	var near := WorldRegistry.neighbors(_entries, entry)
 	for direction: String in near:
-		var other: Dictionary = near[direction]
-		if entry.region == "" or other.region != entry.region:
-			gates[direction] = other
+		if not loaded.has(near[direction].world_id):
+			gates[direction] = near[direction]
 	return gates
 
 
@@ -369,11 +380,12 @@ func _site_is_solid(meshes: Array, position: Vector3) -> bool:
 
 # 最初の基準点として、始めた場所のすぐ前に、篝火を 1 つ置く。ここで休める (休むとセーブされ、落ちたらここへ戻る)。
 # 篝火を、世界のあちこちへ置く仕組みは、探索の骨格 (段階4) で作る
-func _add_start_bonfire(meshes: Array, start: Vector3) -> void:
+func _add_start_bonfire(meshes: Array, start: Vector3) -> Node3D:
 	var fire: Node3D = load("res://scenes/bonfire.tscn").instantiate()
 	fire.name = "StartBonfire"
 	add_child(fire)
 	fire.global_position = WorldLoader.pick_start(meshes, Vector3(start.x, 0.0, start.z - START_BONFIRE_DISTANCE))
+	return fire
 
 
 # 点の表現を入れる。歩いた所だけが現れ、まだの所は暗く沈む。off なら入れず (null を返し)、世界は最初から全て見える。
@@ -433,11 +445,16 @@ func _on_rested(position: Vector3) -> void:
 # global 座標 position (水平) を含むタイル。なければ、空
 func _tile_at(position: Vector3) -> Dictionary:
 	for tile in _tiles:
-		var local: Vector3 = position - tile.offset
-		var box: AABB = tile.bounds
-		if local.x >= box.position.x and local.x <= box.end.x and local.z >= box.position.z and local.z <= box.end.z:
+		if _contains_xz(tile, position):
 			return tile
 	return {}
+
+
+# タイルの範囲 (水平) に、global 座標 position が入っているか
+func _contains_xz(tile: Dictionary, position: Vector3) -> bool:
+	var local: Vector3 = position - tile.offset
+	var box: AABB = tile.bounds
+	return local.x >= box.position.x and local.x <= box.end.x and local.z >= box.position.z and local.z <= box.end.z
 
 
 # 読んだセーブ (1 つのタイルの記録) を、ゲームへ反映する。項目ごとに検証して、不正なものは、黙って無視する。

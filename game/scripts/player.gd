@@ -31,6 +31,9 @@ const NOTICE_SECONDS := 1.5
 signal rested(position: Vector3)
 
 var spawn_position: Vector3
+# これより低い所へ落ちたら、位置を見失う (床の下へ落ちた、と見なす)。地域で、標高の低いタイルを並べる時は、
+# 地域でいちばん低い地面より、下に決める (World が、タイルの位置から決めて、渡す)
+var fall_limit := FALL_LIMIT
 var has_rested := false  # 篝火で休んだことがあるか (休んだことがなければ、復帰地点は、最初の地点)
 var rescanning := false
 var nearby_bonfire: Node3D
@@ -126,7 +129,7 @@ func _physics_process(delta: float) -> void:
 	_update_camera(delta, running)
 	_update_nearby_bonfire()
 
-	if global_position.y < FALL_LIMIT:
+	if global_position.y < fall_limit:
 		_rescan()
 
 

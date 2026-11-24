@@ -115,6 +115,18 @@ func _initialize() -> void:
 		await physics_frame
 	check(world._entry.world_id == "reg-a" and world._exits.has("west"), "A へ戻ると、関所は、また西の X")
 
+	# 継ぎ目の線の上 (A と B の、両方の範囲): いまのタイル (B) のまま、A に切り替わらない
+	player.global_position = Vector3(size.x + 5.0, ground.y + offset_b.y + 2.0, -size.z / 2.0)
+	for i in 30:
+		await physics_frame
+	player.global_position = Vector3(size.x, ground.y + offset_b.y + 2.0, -size.z / 2.0)
+	for i in 10:
+		await physics_frame
+	check(world._entry.world_id == "reg-b", "継ぎ目の線の上でも、いまのタイルのまま (A に、切り替わらない)")
+	player.global_position = Vector3(5.0, ground.y + 2.0, -size.z / 2.0)
+	for i in 30:
+		await physics_frame
+
 	# A の西の端 = 関所: 別の地域へ移る (暗転する)
 	player.global_position = Vector3(1.0, ground.y + 2.0, -size.z / 2.0)
 	for i in 20:
@@ -154,6 +166,29 @@ func _initialize() -> void:
 	await process_frame
 	await process_frame
 
+	# 始まりの篝火 (.json に bonfire がないマップ) も、火が灯ったまま、続きから始まる
+	var plain := _start(SAMPLE, true)
+	for i in 40:
+		await physics_frame
+	var plain_fire: Node3D = plain.find_child("StartBonfire", true, false)
+	var plain_player: CharacterBody3D = plain.get_node("Player")
+	plain_player.global_position = plain_fire.global_position + Vector3(0.5, 0.5, 0.0)
+	for i in 10:
+		await physics_frame
+	plain_player._update_nearby_bonfire()
+	plain_player.rest()
+	check(plain_fire.lit, "始まりの篝火で休むと、火が灯る")
+	plain.queue_free()
+	await process_frame
+	await process_frame
+	var plain2 := _start(SAMPLE, true)
+	for i in 40:
+		await physics_frame
+	check(plain2.find_child("StartBonfire", true, false).lit, "続きから始めても、始まりの篝火の火は、灯ったまま (初めて休む知らせを、繰り返さない)")
+	plain2.queue_free()
+	await process_frame
+	await process_frame
+
 	# 続きから (A を始める世界にして始める): B の篝火の火は、灯ったまま。B の確かめた所も戻る
 	var scene3 := _start(path_a, true)
 	for i in 40:
@@ -178,6 +213,45 @@ func _initialize() -> void:
 
 	SaveGame.delete()
 	SaveGame.allow_headless = false
+
+	# 標高の低いタイル (原点の標高が 100 m 低い): 歩いて降りても、位置を見失わない。落ちたと見なす高さは、地域でいちばん低い地面の下
+	var path_h := _make_world("high", "高い所", ORIGIN, size, "low-region", ground)
+	var path_l := _make_world("low", "低い所", ORIGIN + Vector3(size.x, 0.0, -100.0), size, "low-region", ground)
+	var scene_l := _start(path_h)
+	for i in 40:
+		await physics_frame
+	var world_l: Node = scene_l.get_node("World")
+	var player_l: CharacterBody3D = scene_l.get_node("Player")
+	var low_offset: Vector3 = world_l._tiles[1].offset
+	check(low_offset.y < -90.0, "(準備) 低いタイルは、始める世界から見て、100 m 近く下に並ぶ (原点が低い分): %s" % [low_offset])
+	check(player_l.fall_limit < low_offset.y, "落ちたと見なす高さは、地域でいちばん低い地面の下に決まる (既定の -20 のままでは、低いタイルへ降りただけで、位置を見失う): %s" % [player_l.fall_limit])
+	player_l.global_position = Vector3(size.x + 5.0, ground.y + low_offset.y + 2.0, -size.z / 2.0)
+	for i in 120:
+		await physics_frame
+	check(not player_l.rescanning and player_l.is_on_floor() and player_l.global_position.x > size.x and player_l.global_position.y < -50.0, "高さが 100 m 近く違うタイルへ歩いても、位置を見失わず (篝火へ戻されず)、そのタイルの床に立てる: %s" % [player_l.global_position])
+	scene_l.queue_free()
+	await process_frame
+
+	# 地域のタイルが、読み込みの上限で外れた時: 外れた隣へは、関所で移る
+	var scene_m := _start("")
+	scene_m.queue_free()
+	await process_frame
+	var scene_c: Node = load("res://scenes/world_local.tscn").instantiate()
+	var settings_c := GameSettings.new()
+	settings_c.weather_enabled = false
+	scene_c.get_node("DayNight").settings = settings_c
+	scene_c.get_node("World").world_path = path_a
+	scene_c.get_node("World").save_enabled = false
+	scene_c.get_node("World").auto_change_scene = false
+	scene_c.get_node("World").max_tiles = 1  # B は、読み込まれない
+	root.add_child(scene_c)
+	for i in 40:
+		await physics_frame
+	var world_c: Node = scene_c.get_node("World")
+	check(world_c._tiles.size() == 1 and world_c._exits.has("east") and world_c._exits.east.world_id == "reg-b" and world_c._exits.has("west"), "読み込みの上限で外れた同じ地域の隣 (B) も、関所になる (東)。別の地域 (X) は、西")
+	scene_c.queue_free()
+	await process_frame
+
 	for sub in ["/saves", ""]:
 		if not DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(DIR + sub)):
 			continue
