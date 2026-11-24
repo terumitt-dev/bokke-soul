@@ -232,6 +232,18 @@ func _initialize() -> void:
 	scene_l.queue_free()
 	await process_frame
 
+	# 篝火の場所がないタイルにも、代わりの篝火が置かれる (始める世界以外でも。歩いて入った先で、休める)
+	var path_n1 := _make_world("n1", "無印その 1", ORIGIN, size, "plain-region", null)
+	_make_world("n2", "無印その 2", ORIGIN + Vector3(size.x, 0.0, 0.0), size, "plain-region", null)
+	var scene_n := _start(path_n1)
+	for i in 40:
+		await physics_frame
+	var near_fire: Node3D = scene_n.find_child("StartBonfire_n2", true, false)
+	check(scene_n.find_child("StartBonfire", true, false) != null and near_fire != null and scene_n.get_node("World")._tiles[1].fire == near_fire, "篝火の場所がない、始める世界以外のタイルにも、代わりの篝火が置かれる")
+	check(near_fire.global_position.x > size.x and near_fire.global_position.x < 2.0 * size.x, "代わりの篝火は、そのタイルの中にある: %s" % [near_fire.global_position])
+	scene_n.queue_free()
+	await process_frame
+
 	# 地域のタイルが、読み込みの上限で外れた時: 外れた隣へは、関所で移る
 	var scene_m := _start("")
 	scene_m.queue_free()

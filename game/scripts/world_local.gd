@@ -105,6 +105,13 @@ func _ready() -> void:
 		home["fire"] = _add_start_bonfire(home.meshes, start)  # 始まりの篝火も、タイルの篝火として、火の状態を持つ
 
 	# 落ちた、と見なす高さ: 地域でいちばん低い地面の下。標高の低いタイルへ歩いて降りただけで、位置を見失わないように
+	# 篝火の場所がない (または、作り直した世界で、使えない) 始める世界以外のタイルにも、代わりの篝火を置く
+	# (歩いて入ったタイルでも、休んで、復帰地点を決められる。始める場所によって、篝火の有無が変わらない)
+	for i in range(1, _tiles.size()):
+		if _tiles[i].fire == null:
+			var center: Vector3 = _tiles[i].bounds.get_center() + _tiles[i].offset
+			_tiles[i]["fire"] = _add_start_bonfire(_tiles[i].meshes, WorldLoader.pick_start(_tiles[i].meshes, center), "StartBonfire_" + _tiles[i].path.get_file().get_basename())
+
 	var lowest := INF
 	for tile in _tiles:
 		lowest = minf(lowest, tile.offset.y + tile.bounds.position.y)
@@ -380,9 +387,9 @@ func _site_is_solid(meshes: Array, position: Vector3) -> bool:
 
 # 最初の基準点として、始めた場所のすぐ前に、篝火を 1 つ置く。ここで休める (休むとセーブされ、落ちたらここへ戻る)。
 # 篝火を、世界のあちこちへ置く仕組みは、探索の骨格 (段階4) で作る
-func _add_start_bonfire(meshes: Array, start: Vector3) -> Node3D:
+func _add_start_bonfire(meshes: Array, start: Vector3, fire_name := "StartBonfire") -> Node3D:
 	var fire: Node3D = load("res://scenes/bonfire.tscn").instantiate()
-	fire.name = "StartBonfire"
+	fire.name = fire_name
 	add_child(fire)
 	fire.global_position = WorldLoader.pick_start(meshes, Vector3(start.x, 0.0, start.z - START_BONFIRE_DISTANCE))
 	return fire
