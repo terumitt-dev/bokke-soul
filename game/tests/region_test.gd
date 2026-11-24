@@ -240,7 +240,7 @@ func _initialize() -> void:
 		await physics_frame
 	var near_fire: Node3D = scene_n.find_child("StartBonfire_n2", true, false)
 	check(scene_n.find_child("StartBonfire", true, false) != null and near_fire != null and scene_n.get_node("World")._tiles[1].fire == near_fire, "篝火の場所がない、始める世界以外のタイルにも、代わりの篝火が置かれる")
-	check(near_fire.global_position.x > size.x and near_fire.global_position.x < 2.0 * size.x, "代わりの篝火は、そのタイルの中にある: %s" % [near_fire.global_position])
+	check(near_fire != null and near_fire.global_position.x > size.x and near_fire.global_position.x < 2.0 * size.x, "代わりの篝火は、そのタイルの中にある: %s" % [near_fire.global_position if near_fire != null else null])
 	scene_n.queue_free()
 	await process_frame
 
