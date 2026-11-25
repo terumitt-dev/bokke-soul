@@ -29,7 +29,10 @@ const NOTICE_SECONDS := 1.5
 
 # 篝火で休んだ時 (position は篝火の位置)。セーブなどが聞く
 signal rested(position: Vector3)
+signal travel_requested(bonfire: Node3D)  # 火を灯した篝火の近くで、移動の操作をした
 
+# 入力を受け付けない (移動の一覧を開いている間)。重力だけが効く
+var input_blocked := false
 var spawn_position: Vector3
 # これより低い所へ落ちたら、位置を見失う (床の下へ落ちた、と見なす)。地域で、標高の低いタイルを並べる時は、
 # 地域でいちばん低い地面より、下に決める (World が、タイルの位置から決めて、渡す)
@@ -73,22 +76,36 @@ func _notification(what: int) -> void:
 
 func _input(event: InputEvent) -> void:
 	# Esc は他の入力処理より先に拾って、確実にマウスを解放する
+	if input_blocked:
+		return  # 一覧を開いている間は、Esc を、一覧が受け取る (一覧を閉じる)
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		get_viewport().set_input_as_handled()
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if input_blocked:
+		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		look(-event.relative.x * MOUSE_SENSITIVITY, -event.relative.y * MOUSE_SENSITIVITY)
 	elif event is InputEventMouseButton and event.pressed:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	elif event.is_action_pressed("rest"):
 		rest()
+	elif event.is_action_pressed("travel"):
+		if not rescanning and nearby_bonfire != null and "lit" in nearby_bonfire and nearby_bonfire.lit:
+			travel_requested.emit(nearby_bonfire)
 
 
 func _physics_process(delta: float) -> void:
 	if rescanning:
+		return
+	if input_blocked:
+		velocity.x = 0.0
+		velocity.z = 0.0
+		if not is_on_floor():
+			velocity.y -= gravity * delta
+		move_and_slide()
 		return
 
 	# コントローラーの右スティックで視点を回す (マウスは _unhandled_input で扱う)
@@ -180,7 +197,9 @@ func _update_nearby_bonfire() -> void:
 		if distance <= nearest:
 			nearest = distance
 			nearby_bonfire = bonfire
-	prompt.visible = nearby_bonfire != null
+	prompt.visible = nearby_bonfire != null and not input_blocked
+	# 火を灯した篝火では、移動もできる
+	prompt.text = "E: 休む    F: 移動する" if nearby_bonfire != null and "lit" in nearby_bonfire and nearby_bonfire.lit else "E: 休む"
 
 
 # 篝火の近くで休むと、ここが復帰地点になる
