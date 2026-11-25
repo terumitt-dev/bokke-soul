@@ -51,6 +51,8 @@ signal region_loaded  # 地域のタイルを、全て読み込み終えた
 #   fire (篝火)、points (点の表現)、loaded_reveal (保存から読んだ、確かめた所の地図。点の表現が無効な間も、保存に引き継ぐ)、
 #   spawn_local (最後に休んだ位置。そのタイルの座標。なければ null)、visited (遊んだか。遊んだタイルだけ保存する)
 var _planned_ids := {}  # 読み込む予定のタイルの世界の名前 (まだ読み込んでいないものも)。これらの間は、歩いて渡れる (関所ではない)
+var _unready := {}  # 当たり判定が、まだできていないタイルの範囲 (世界の場所 → Rect2。始める世界の座標の、水平の範囲)
+var _last_safe := Vector3.ZERO  # 最後に、立っていてよい所にいた位置 (まだできていないタイルへ入りそうな時の、戻り先)
 var _pending: Array[Dictionary] = []  # まだ読み込んでいないタイル (始める世界から近い順)
 var _streaming := false
 var _tiles: Array[Dictionary] = []
@@ -97,6 +99,11 @@ func _ready() -> void:
 	_bounds = home.bounds
 	# 残りのタイルは、始める世界から近い順に、あとで、歩きながら読み込む (始めるまでの待ちを、始める世界の分だけにする)
 	_pending.assign(plan.slice(1))
+	for item in _pending:
+		# 当たり判定ができるまで、入れない範囲 (測量座標の大きさから。東西は x、南北は、北が -z)
+		var size: Vector3 = item.entry.size
+		var offset: Vector3 = item.offset
+		_unready[item.path] = Rect2(offset.x, offset.z - size.z, size.x, size.z)
 	_pending.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return (a.offset as Vector3).length() < (b.offset as Vector3).length())
 
 	# 始める世界の篝火 (データの .json の bonfire) があれば、そこから始まる。
@@ -115,6 +122,7 @@ func _ready() -> void:
 
 	_place_arrival(home.meshes)
 	_setup_points_position = player.global_position  # テスト用: 探索地図を作る時の、プレイヤーの位置
+	_last_safe = player.global_position
 	home["points"] = _add_points(home.world, true)
 	_points = home.points
 	_setup_save()
@@ -132,11 +140,19 @@ func _stream_tiles() -> void:
 		await get_tree().create_timer(STREAM_INTERVAL).timeout
 		if not is_inside_tree() or _pending.is_empty():
 			break
-		var tile := _load_tile(_pending.pop_front(), false)
+		var plan: Dictionary = _pending.pop_front()
+		var tile := _load_tile(plan, false)
 		if tile.is_empty():
+			# 読み込めなかった。歩いて渡れる予定から外して、そちらの端を、関所に戻す (空白のまま、残さない)
+			_planned_ids.erase(plan.entry.get("world_id", ""))
+			_unready.erase(plan.path)
+			_exits = _gates_of(_entry)
 			continue
 		await _build_collision(tile.meshes)
+		if not is_inside_tree():
+			break  # 待っている間に、場面を離れた
 		_tiles.append(tile)
+		_unready.erase(plan.path)  # 当たり判定ができたので、入れる
 		_attach_tile(tile)
 	_streaming = false
 	region_loaded.emit()
@@ -146,13 +162,15 @@ func _stream_tiles() -> void:
 # 帯ごとの形は、1 フレームに 1 つずつ作る (24 万の三角形を、1 度に作ると、数百ミリ秒、画面が止まる)
 func _build_collision(meshes: Array) -> void:
 	for mesh: MeshInstance3D in meshes:
-		var task := WorkerThreadPool.add_task(_split_faces.bind(mesh.mesh))
+		var strips: Array = []  # 別のスレッドが、ここへ結果を入れる (タスクごとの入れ物なので、並べて走らせても、混ざらない)
+		var task := WorkerThreadPool.add_task(_split_faces.bind(mesh.mesh, strips))
 		while not WorkerThreadPool.is_task_completed(task):
+			if not is_inside_tree():
+				WorkerThreadPool.wait_for_task_completion(task)
+				return
 			await get_tree().process_frame
 		WorkerThreadPool.wait_for_task_completion(task)
-		var strips := _strips
-		_strips = []
-		if not is_instance_valid(mesh) or not mesh.is_inside_tree():
+		if not is_inside_tree() or not is_instance_valid(mesh) or not mesh.is_inside_tree():
 			return
 		var body := StaticBody3D.new()
 		mesh.add_child(body)
@@ -164,12 +182,13 @@ func _build_collision(meshes: Array) -> void:
 			var collider := CollisionShape3D.new()
 			collider.shape = shape
 			body.add_child(collider)
+			if not is_inside_tree():
+				return
 			await get_tree().process_frame
 
 
-# 別のスレッドで、メッシュの三角形を、x (東西) の帯に分ける。結果は _strips に入れる
-var _strips: Array = []
-func _split_faces(mesh: Mesh) -> void:
+# 別のスレッドで、メッシュの三角形を、x (東西) の帯に分けて、strips に入れる
+func _split_faces(mesh: Mesh, strips: Array) -> void:
 	var faces := mesh.get_faces()
 	var low := INF
 	var high := -INF
@@ -177,7 +196,6 @@ func _split_faces(mesh: Mesh) -> void:
 		low = minf(low, vertex.x)
 		high = maxf(high, vertex.x)
 	var width := maxf(high - low, 0.001)
-	var strips: Array = []
 	for i in COLLISION_STRIPS:
 		strips.append(PackedVector3Array())
 	for i in range(0, faces.size() - 2, 3):
@@ -186,7 +204,6 @@ func _split_faces(mesh: Mesh) -> void:
 		strip.append(faces[i])
 		strip.append(faces[i + 1])
 		strip.append(faces[i + 2])
-	_strips = strips
 
 
 # 地域のタイルを全て読み込み終えたか (読み込み中でなく、残りもない)
@@ -251,7 +268,8 @@ func _load_tile(plan: Dictionary, is_home: bool) -> Dictionary:
 	return {
 		"path": plan.path, "entry": plan.entry, "offset": offset, "world": world, "meshes": meshes, "bounds": bounds,
 		"fire": _add_area_bonfire(plan.path, meshes, offset), "points": null, "loaded_reveal": "", "spawn_local": null,
-		"visited": is_home, "dirty": true, "state_cache": null, "saved_revision": -2, "encoded": 0,
+		"visited": is_home, "dirty": true, "state_cache": null, "saved_revision": -2,
+		"encoded": 0,  # テスト用の数: 探索地図を PNG にした回数 (保存で、使い回されたかを確かめる)
 	}
 
 
@@ -260,6 +278,19 @@ func _entry_by_id(id: String) -> Dictionary:
 		if entry.world_id == id:
 			return entry
 	return {}
+
+
+# 当たり判定が、まだできていないタイルへは、入れない (入ると、床がなく、落ちる)。入りそうな時は、最後に立っていた位置へ戻す。
+# 読み込み済みのタイルの上にいる間は、境目の線の上でも、そのまま
+func _keep_out_of_unready() -> void:
+	var position := player.global_position
+	if not _unready.is_empty() and _tile_at(position).is_empty():
+		for path: String in _unready:
+			if (_unready[path] as Rect2).has_point(Vector2(position.x, position.z)):
+				player.global_position = _last_safe
+				player.velocity = Vector3.ZERO
+				return
+	_last_safe = position
 
 
 # いま、プレイヤーがいるタイルを決める (範囲の中にいるタイル。どこにもいなければ、そのまま)。変わったら、関所を調べ直して、
@@ -347,6 +378,7 @@ func _finish_arrival() -> void:
 func _physics_process(_delta: float) -> void:
 	if _tiles.is_empty():
 		return
+	_keep_out_of_unready()
 	_update_current()
 	if _traveling or _exits.is_empty() or player.rescanning:
 		return

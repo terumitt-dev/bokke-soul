@@ -28,8 +28,9 @@ func _survey_of(local: Vector3, origin: Vector3) -> Array:
 	return [local.x + origin.x, -local.z + origin.y, local.y + origin.z]
 
 
-func _make_world(name: String, label: String, origin: Vector3, size: Vector3, region: String, bonfire: Variant) -> String:
-	var world := "%s/%s.glb" % [DIR, name]
+func _make_world(name: String, label: String, origin: Vector3, size: Vector3, region: String, bonfire: Variant, dir := DIR) -> String:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	var world := "%s/%s.glb" % [dir, name]
 	var file := FileAccess.open(world, FileAccess.WRITE)
 	file.store_buffer(FileAccess.get_file_as_bytes(SAMPLE))
 	file.close()
@@ -38,7 +39,7 @@ func _make_world(name: String, label: String, origin: Vector3, size: Vector3, re
 		sidecar["region"] = region
 	if bonfire != null:
 		sidecar["bonfire"] = _survey_of(bonfire, origin)
-	_write("%s/%s.json" % [DIR, name], JSON.stringify(sidecar))
+	_write("%s/%s.json" % [dir, name], JSON.stringify(sidecar))
 	return world
 
 
@@ -296,6 +297,31 @@ func _initialize() -> void:
 	check(world_t._tiles.size() == 2 and world_t.is_region_loaded() and region_done[0] and loaded_names == ["低い所"], "残りのタイルが、あとから読み込まれ、通知される: %s" % [loaded_names])
 	check(scene_t.get_node("Player").fall_limit < limit_before - 50.0, "あとから読み込んだ低いタイルに合わせて、落ちたと見なす高さが、決め直される (%s → %s)" % [limit_before, scene_t.get_node("Player").fall_limit])
 
+	# 当たり判定ができるまで、読み込み中のタイルへは入れない (入ると、床がなく、落ちる)。できたら、入れる
+	var player_g: CharacterBody3D = scene_t.get_node("Player")
+	check(world_t._unready.is_empty(), "(準備) 読み込み済み: 入れない範囲は、もうない")
+	scene_t.queue_free()
+	await process_frame
+	var scene_g := _start(path_h)
+	await physics_frame
+	var world_g: Node = scene_g.get_node("World")
+	var player_gate: CharacterBody3D = scene_g.get_node("Player")
+	var before_x: float = player_gate.global_position.x
+	player_gate.global_position = Vector3(size.x + 5.0, 3.0, -size.z / 2.0)  # まだ読み込み中の、東のタイルの中
+	for i in 6:
+		await physics_frame
+	check(world_g._tiles.size() == 1 and player_gate.global_position.x <= size.x and not player_gate.rescanning, "読み込み中のタイルへは、入れない (戻される): x = %.1f" % player_gate.global_position.x)
+	await _wait_loaded(scene_g)
+	player_gate.global_position = Vector3(size.x + 5.0, ground.y + world_g._tiles[1].offset.y + 2.0, -size.z / 2.0)
+	for i in 6:
+		await physics_frame
+	check(world_g._tiles.size() == 2 and player_gate.global_position.x > size.x, "読み込みが終わったら、入れる")
+	scene_g.queue_free()
+	await process_frame
+	scene_t = _start(path_h, true)  # 以降の確認のために、保存ありで始め直す
+	await _wait_loaded(scene_t)
+	world_t = scene_t.get_node("World")
+
 	# 保存: 変わっていないタイルの探索地図は、PNG にし直さない (前回のものを使い回す)。遊んだタイルだけが、保存される
 	var low_tile: Dictionary = world_t._tiles[1]
 	var player_t: CharacterBody3D = scene_t.get_node("Player")
@@ -320,6 +346,17 @@ func _initialize() -> void:
 	await process_frame
 	SaveGame.delete()
 	SaveGame.allow_headless = false
+
+	# 読み込めなかったタイル (同じ地域): 歩いて渡れる予定から外れ、その端は、関所に戻る
+	var fail_path := _make_world("f1", "読めるタイル", ORIGIN, size, "fail-region", ground, DIR + "/fail")
+	_make_world("f2", "読めないタイル", ORIGIN + Vector3(size.x, 0.0, 0.0), size, "fail-region", null, DIR + "/fail")
+	_write(DIR + "/fail/f2.glb", "これは GLB ではありません")  # 一覧には載るが、読み込めない
+	var scene_f := _start(fail_path)
+	await _wait_loaded(scene_f)
+	var world_f: Node = scene_f.get_node("World")
+	check(world_f._tiles.size() == 1 and world_f._exits.get("east", {}).get("world_id", "") == "reg-f2", "読み込めなかった同じ地域のタイルの方向は、関所に戻る (空白のまま、残さない)")
+	scene_f.queue_free()
+	await process_frame
 
 	# 篝火の場所がないタイルにも、代わりの篝火が置かれる (始める世界以外でも。歩いて入った先で、休める)
 	var path_n1 := _make_world("n1", "無印その 1", ORIGIN, size, "plain-region", null)
@@ -354,7 +391,7 @@ func _initialize() -> void:
 	scene_c.queue_free()
 	await process_frame
 
-	for sub in ["/saves", ""]:
+	for sub in ["/saves", "/fail", ""]:
 		if not DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(DIR + sub)):
 			continue
 		for file in DirAccess.get_files_at(DIR + sub):
