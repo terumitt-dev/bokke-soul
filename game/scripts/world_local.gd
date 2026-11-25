@@ -342,6 +342,8 @@ func _gates_of(entry: Dictionary) -> Dictionary:
 # (傾斜のある所で、地面に埋まらない、高く浮きすぎない)。引き継ぎが不正なら、何もしない
 func _place_arrival(meshes: Array) -> void:
 	_arrived_at = Time.get_ticks_msec()
+	if _arrival.get("at_bonfire", false):
+		return  # 最後に休んだ篝火のそばに着く。位置は、セーブの記録を戻す時 (_setup_save) に決まる
 	if not (_arrival.get("position") is Vector3):
 		_arrival = {}
 		return
@@ -368,6 +370,16 @@ func _place_arrival(meshes: Array) -> void:
 # 保存を読んだあとの仕上げ (保存した位置に立たせる処理があるので、そのあと、もう一度、着く位置に立たせる)。
 # 篝火で休んだことがあるマップは、復帰地点は、保存した篝火のまま。まだなら、着いた位置。時刻を引き継ぎ、暗転から戻す
 func _finish_arrival() -> void:
+	if _arrival.get("at_bonfire", false):
+		# 位置は、記録を戻した時に、決まっている (原点の補正と、地面の検査のあと)。時刻と、マップの名前と、暗転の戻しだけ行う
+		if _arrival.has("time"):
+			_apply_time(_arrival.time)
+		if _entry.get("name", "") != "":
+			_notify.call_deferred(_entry.name)
+		_ensure_veil()
+		_veil.modulate.a = 1.0
+		_fade(0.0)
+		return
 	if not _arrival.has("landing"):
 		return
 	var landing: Vector3 = _arrival.landing
@@ -410,9 +422,11 @@ func _travel(direction: String) -> void:
 	await _depart(target, position)
 
 
-# 別の地域のマップ target へ、position (target の座標) に着くように移る。呼ぶ側が、_traveling を立てておく。
+# 別の地域のマップ target へ移る。position (target の座標) があれば、そこに着く。null なら、target の、最後に休んだ篝火のそばに着く
+# (セーブの記録を、読み込み直して、原点の補正と、地面の検査をしたあとの位置。作り直したマップでも、ずれない)。
+# 呼ぶ側が、_traveling を立てておく。
 # いまの様子を保存して、暗転して、行き先と、着く位置を引き継ぎ、場面を切り替える
-func _depart(target: Dictionary, position: Vector3) -> void:
+func _depart(target: Dictionary, position: Variant) -> void:
 	# 保存してから移る。最後に遊んだエリアは、行き先にする (着いてから一度も保存しないまま終わっても、行き先から始まる)。
 	# 保存に失敗したら、移らない (いまのマップの探索が、静かに失われないように)。しばらくしてから、もう一度試す
 	if _save_active and not (save_now() and SaveGame.set_current_area(target.path)):
@@ -421,11 +435,14 @@ func _depart(target: Dictionary, position: Vector3) -> void:
 		return
 	var carried := {
 		"path": target.path,
-		"position": position,
 		"yaw": player.pivot.rotation.y,
 		"pitch": player.pivot.rotation.x,
 		"from": _entry.get("name", ""),
 	}
+	if position is Vector3:
+		carried["position"] = position
+	else:
+		carried["at_bonfire"] = true
 	var day_night := get_node_or_null("../DayNight")
 	if day_night != null and day_night.time != null and day_night.settings.time_mode == "accelerated":
 		carried["time"] = day_night.time.total_hours
@@ -447,7 +464,7 @@ func _depart(target: Dictionary, position: Vector3) -> void:
 # 同じ地域の篝火へは、暗転して、その場へ。別の地域の篝火へは、場面を切り替えて移る (読み込む)。
 # 移るだけで、復帰地点は変えない (休むのは、別の操作)
 func _on_travel_requested(here: Node3D) -> void:
-	if _traveling or (_menu != null and _menu.is_open()):
+	if _traveling or (is_instance_valid(_menu) and _menu.is_open()):
 		return
 	_menu_destinations = _travel_destinations(here)
 	if _menu_destinations.is_empty():
@@ -460,12 +477,15 @@ func _on_travel_requested(here: Node3D) -> void:
 	add_child(_menu)
 	player.input_blocked = true
 	_menu.chosen.connect(_on_travel_chosen)
-	_menu.closed.connect(func() -> void: player.input_blocked = false)
+	_menu.closed.connect(func() -> void:
+		player.input_blocked = false
+		_menu = null)
 	_menu.open(names)
 
 
 func _on_travel_chosen(index: int) -> void:
 	player.input_blocked = false
+	_menu = null
 	if index >= 0 and index < _menu_destinations.size():
 		_go_to(_menu_destinations[index])
 
@@ -501,7 +521,7 @@ func _tile_of(entry: Dictionary) -> Dictionary:
 func _go_to(destination: Dictionary) -> void:
 	_traveling = true
 	if destination.tile.is_empty():
-		await _depart(destination.entry, destination.spawn + Vector3(0.0, START_HEIGHT, 0.0))
+		await _depart(destination.entry, null)  # 着く位置は、行き先が、自分の記録から決める
 		return
 	_ensure_veil()
 	_veil_label.visible = false  # 同じ地域の中は、読み込まないので、「読み込み中」は出さない

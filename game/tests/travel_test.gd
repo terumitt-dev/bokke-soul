@@ -75,7 +75,8 @@ func _initialize() -> void:
 	WorldLoader.arrival = {}
 	# X の篝火は、前に火を灯した (セーブに記録がある)。復帰位置は、X の座標
 	var x_spawn := ground + Bonfire.REST_OFFSET
-	SaveGame.write(path_x, {"has_rested": true, "spawn": SaveGame.encode_vector(x_spawn)})
+	var x_origin := ORIGIN - Vector3(size.x, 0.0, 0.0)
+	SaveGame.write(path_x, {"has_rested": true, "spawn": SaveGame.encode_vector(x_spawn), "origin": SaveGame.encode_vector(x_origin)})
 	check(SaveGame.lit_areas().size() == 1 and SaveGame.lit_areas().has("trv-x") and SaveGame.lit_areas()["trv-x"].is_equal_approx(x_spawn), "(準備) セーブから、火を灯したエリアと、その復帰位置が分かる")
 
 	var scene: Node = load("res://scenes/world_local.tscn").instantiate()
@@ -120,6 +121,11 @@ func _initialize() -> void:
 	world._menu._unhandled_input(_action("ui_cancel"))
 	await process_frame
 	check(not player.input_blocked and not world._menu_destinations.is_empty(), "取り消しで、一覧が閉じ、操作が戻る")
+	await process_frame
+	player._unhandled_input(_action("travel"))
+	check(is_instance_valid(world._menu) and world._menu.is_open() and player.input_blocked, "閉じたあとも、もう一度、一覧を開ける (解放済みの一覧を触らない)")
+	world._menu._unhandled_input(_action("ui_cancel"))
+	await process_frame
 
 	# B の篝火にも火を灯して、A に戻って休む (復帰地点は、A)
 	player.global_position = fire_b.global_position + Vector3(0.5, 0.5, 0.0)
@@ -159,9 +165,26 @@ func _initialize() -> void:
 	await create_timer(0.8).timeout
 	var carried: Dictionary = WorldLoader.arrival
 	check(carried.get("path") == path_x and traveled == [path_x], "別の地域の篝火へは、その地域のマップへ、場面を切り替えて移る")
-	check((carried.get("position", Vector3.ZERO) as Vector3).is_equal_approx(x_spawn + Vector3(0.0, world.START_HEIGHT, 0.0)), "着く位置は、X の復帰位置のそば: %s" % [carried.get("position")])
+	check(carried.get("at_bonfire", false) and not carried.has("position"), "着く位置は、行き先が、自分の記録から決める (位置は渡さない)")
 	check(SaveGame.current_area() == "trv-x" and SaveGame.read(path_a).status == "ok", "最後に遊んだエリアは X。いまの様子は、保存されている")
 	scene.queue_free()
+	await process_frame
+	WorldLoader.arrival = {}
+
+	# 行き先のマップを作り直して、水平の原点が動いていた時: 着く位置は、補正した復帰位置 (保存した座標のままではない)
+	var moved_origin := x_origin - Vector3(4.0, 0.0, 0.0)
+	_make_world("x", "外の地", moved_origin, size, "trv-other", ground)  # 原点が、西へ 4 m 動いた (同じ場所は、x が 4 大きくなる)
+	WorldLoader.arrival = {"path": path_x, "at_bonfire": true, "yaw": 0.0, "pitch": 0.0}
+	var scene_r: Node = load("res://scenes/world_local.tscn").instantiate()
+	scene_r.get_node("DayNight").settings = settings
+	scene_r.get_node("World").save_enabled = true
+	scene_r.get_node("World").auto_change_scene = false
+	root.add_child(scene_r)
+	for i in 60:
+		await physics_frame
+	var player_r: CharacterBody3D = scene_r.get_node("Player")
+	check(scene_r.get_node("World")._path == path_x and absf(player_r.global_position.x - (x_spawn.x + 4.0)) < 1.5, "作り直したマップへ移っても、補正した復帰位置のそばに着く (x = %.1f、補正前 %.1f)" % [player_r.global_position.x, x_spawn.x])
+	scene_r.queue_free()
 	await process_frame
 	WorldLoader.arrival = {}
 
