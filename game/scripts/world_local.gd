@@ -229,6 +229,8 @@ func _attach_tile(tile: Dictionary) -> void:
 			_notify("古いセーブを読み込めませんでした。このあいだは、保存しません")
 		elif result.status == "ok":
 			_apply_tile_save(tile, result.state, false)
+	tile.fire.add_to_group("bonfire")  # タイルを登録し、記録を戻したので、休めるようにする
+	tile.fire.visible = true
 	tile_loaded.emit(tile.entry.get("name", ""))
 
 
@@ -265,9 +267,15 @@ func _load_tile(plan: Dictionary, is_home: bool) -> Dictionary:
 		var box := mesh.global_transform * mesh.get_aabb()
 		bounds = box if i == 0 else bounds.merge(box)
 	bounds.position -= offset  # そのタイルの座標での範囲にする (セーブに入れる範囲は、そのタイルの座標)
+	var fire := _add_area_bonfire(plan.path, meshes, offset)
+	if fire != null and not is_home:
+		# あとから読み込むタイルの篝火は、タイルを登録し、記録を戻すまで (_attach_tile)、休めない・見えない状態にする
+		# (その前に休むと、どのタイルの篝火か分からず、休んだ記録が、失われる)
+		fire.remove_from_group("bonfire")
+		fire.visible = false
 	return {
 		"path": plan.path, "entry": plan.entry, "offset": offset, "world": world, "meshes": meshes, "bounds": bounds,
-		"fire": _add_area_bonfire(plan.path, meshes, offset), "points": null, "loaded_reveal": "", "spawn_local": null,
+		"fire": fire, "points": null, "loaded_reveal": "", "spawn_local": null,
 		"visited": is_home, "dirty": true, "state_cache": null, "saved_revision": -2,
 		"encoded": 0,  # テスト用の数: 探索地図を PNG にした回数 (保存で、使い回されたかを確かめる)
 	}

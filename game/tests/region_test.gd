@@ -316,7 +316,21 @@ func _initialize() -> void:
 	for i in 6:
 		await physics_frame
 	check(world_g._tiles.size() == 2 and player_gate.global_position.x > size.x, "読み込みが終わったら、入れる")
+	check(get_nodes_in_group("bonfire").size() == 2 and world_g._tiles[1].fire.visible, "読み込みが終わったら、その篝火も休める")
 	scene_g.queue_free()
+	await process_frame
+	var scene_w := _start(path_h)
+	var world_w: Node = scene_w.get_node("World")
+	# 読み込みの途中 (世界は読み込んだが、当たり判定を作っていて、タイルとして登録される前): そのタイルの篝火は、休めない
+	var seen_during := -1
+	var waited_frames := 0
+	while world_w._tiles.size() < 2 and waited_frames < 2000:
+		await process_frame
+		waited_frames += 1
+		if world_w._pending.is_empty() and world_w._tiles.size() == 1:
+			seen_during = get_nodes_in_group("bonfire").size()
+	check(seen_during == 1, "読み込みの途中のタイルの篝火は、休めない (タイルを登録し、記録を戻すまで): 途中の数 = %d" % seen_during)
+	scene_w.queue_free()
 	await process_frame
 	scene_t = _start(path_h, true)  # 以降の確認のために、保存ありで始め直す
 	await _wait_loaded(scene_t)
