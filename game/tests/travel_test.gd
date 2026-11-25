@@ -210,6 +210,27 @@ func _initialize() -> void:
 	scene2.queue_free()
 	await process_frame
 
+	# 行き先が多くても、画面からはみ出さない: スクロールできる枠に並び、「やめる」は、いつも見える
+	root.size = Vector2i(1152, 648)  # ヘッドレスの画面は、既定では、とても小さい。ふつうのウィンドウの大きさにする
+	var many := TravelMenu.new()
+	root.add_child(many)
+	var many_names: Array[String] = []
+	for i in 60:
+		many_names.append("たくさんの篝火 %d" % i)
+	many.open(many_names)
+	for i in 3:
+		await process_frame
+	var view := many.get_viewport().get_visible_rect().size
+	var cancel_button: Button = many.buttons[many.buttons.size() - 1]
+	check(many.scroll != null and many.scroll.size.y <= view.y * TravelMenu.MAX_HEIGHT_RATIO + 1.0, "行き先が 60 個でも、一覧の枠の高さは、画面の高さの上限を超えない (%.0f / %.0f)" % [many.scroll.size.y, view.y])
+	check(cancel_button.global_position.y + cancel_button.size.y <= view.y and cancel_button.global_position.y >= 0.0, "「やめる」は、いつも、画面の中に見える (y=%.0f 高さ=%.0f 画面=%s)" % [cancel_button.global_position.y, cancel_button.size.y, view])
+	many.buttons[40].grab_focus()
+	await process_frame
+	await process_frame
+	check(many.scroll.scroll_vertical > 0, "遠い行き先を選ぶと、枠が、その行までスクロールする (%d)" % many.scroll.scroll_vertical)
+	many.close()
+	await process_frame
+
 	SaveGame.delete()
 	SaveGame.allow_headless = false
 	for sub in ["/saves", ""]:
