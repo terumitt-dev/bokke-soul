@@ -72,6 +72,8 @@ var _traveling := false
 var _overlay: CanvasLayer
 var _veil: ColorRect
 var _veil_label: Label
+var _menu: TravelMenu
+var _menu_destinations: Array[Dictionary] = []
 
 
 func _ready() -> void:
@@ -128,6 +130,7 @@ func _ready() -> void:
 	_setup_save()
 	_update_current(true)
 	_finish_arrival()
+	player.travel_requested.connect(_on_travel_requested)
 	if not _pending.is_empty():
 		_stream_tiles()
 
@@ -404,6 +407,12 @@ func _travel(direction: String) -> void:
 	var local_position: Vector3 = player.global_position - _tiles[_current].offset  # いまのタイルの座標
 	var position := WorldRegistry.clamp_inside(target, WorldRegistry.convert_position(_entry, target, local_position), ARRIVAL_INSET)
 	position.y += START_HEIGHT  # 少し上から降りる (面の高さは、着いてから、床が受ける)
+	await _depart(target, position)
+
+
+# 別の地域のマップ target へ、position (target の座標) に着くように移る。呼ぶ側が、_traveling を立てておく。
+# いまの様子を保存して、暗転して、行き先と、着く位置を引き継ぎ、場面を切り替える
+func _depart(target: Dictionary, position: Vector3) -> void:
 	# 保存してから移る。最後に遊んだエリアは、行き先にする (着いてから一度も保存しないまま終わっても、行き先から始まる)。
 	# 保存に失敗したら、移らない (いまのマップの探索が、静かに失われないように)。しばらくしてから、もう一度試す
 	if _save_active and not (save_now() and SaveGame.set_current_area(target.path)):
@@ -432,6 +441,80 @@ func _travel(direction: String) -> void:
 		_arrived_at = Time.get_ticks_msec() + SAVE_RETRY_MS - EXIT_COOLDOWN_MS
 		_veil_label.visible = false
 		_fade(0.0)
+
+
+# 篝火の移動: 火を灯した篝火の近くで、移動の操作をすると、行き先の一覧を開く。選ぶと、その篝火へ移る。
+# 同じ地域の篝火へは、暗転して、その場へ。別の地域の篝火へは、場面を切り替えて移る (読み込む)。
+# 移るだけで、復帰地点は変えない (休むのは、別の操作)
+func _on_travel_requested(here: Node3D) -> void:
+	if _traveling or (_menu != null and _menu.is_open()):
+		return
+	_menu_destinations = _travel_destinations(here)
+	if _menu_destinations.is_empty():
+		_notify("移れる篝火は、まだありません")
+		return
+	var names: Array[String] = []
+	for destination in _menu_destinations:
+		names.append(destination.label)
+	_menu = TravelMenu.new()
+	add_child(_menu)
+	player.input_blocked = true
+	_menu.chosen.connect(_on_travel_chosen)
+	_menu.closed.connect(func() -> void: player.input_blocked = false)
+	_menu.open(names)
+
+
+func _on_travel_chosen(index: int) -> void:
+	player.input_blocked = false
+	if index >= 0 and index < _menu_destinations.size():
+		_go_to(_menu_destinations[index])
+
+
+# 移れる篝火の一覧 (火を灯した、ここ以外の篝火)。読み込んだタイルは、いまの火の状態。読み込んでいないマップは、セーブの記録。
+# 同じ地域で、読み込み中のタイルは、まだ移れない
+func _travel_destinations(here: Node3D) -> Array[Dictionary]:
+	var lit := SaveGame.lit_areas() if _save_active else {}
+	var result: Array[Dictionary] = []
+	for entry in _entries:
+		var tile := _tile_of(entry)
+		var spawn := Vector3.ZERO
+		if not tile.is_empty():
+			if tile.fire == here or tile.fire == null or not tile.fire.lit:
+				continue
+		elif _planned_ids.has(entry.world_id) or not lit.has(entry.world_id):
+			continue
+		else:
+			spawn = lit[entry.world_id]
+		var label: String = "%sの篝火" % entry.name if entry.name != "" else entry.world_id
+		result.append({"entry": entry, "tile": tile, "spawn": spawn, "label": label})
+	return result
+
+
+func _tile_of(entry: Dictionary) -> Dictionary:
+	for tile in _tiles:
+		if tile.entry.get("world_id", "") == entry.world_id:
+			return tile
+	return {}
+
+
+# destination へ移る。読み込んだタイルなら、暗転して、その篝火のそばへ。そうでなければ、そのマップへ、場面を切り替えて
+func _go_to(destination: Dictionary) -> void:
+	_traveling = true
+	if destination.tile.is_empty():
+		await _depart(destination.entry, destination.spawn + Vector3(0.0, START_HEIGHT, 0.0))
+		return
+	_ensure_veil()
+	_veil_label.visible = false  # 同じ地域の中は、読み込まないので、「読み込み中」は出さない
+	await _fade(1.0)
+	var fire: Node3D = destination.tile.fire
+	var landing: Vector3 = fire.rest_position() + Vector3(0.0, 0.5, 0.0)
+	player.global_position = landing
+	player.velocity = Vector3.ZERO
+	_last_safe = landing
+	_update_current()
+	_arrived_at = Time.get_ticks_msec()  # 着いた直後は、端の出口が効かない
+	await _fade(0.0)
+	_traveling = false
 
 
 # 暗転の幕。画面全体を覆う黒と、「読み込み中」の文字

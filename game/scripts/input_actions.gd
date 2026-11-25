@@ -21,6 +21,7 @@ const ACTIONS := {
 	"run": {"keys": [KEY_SHIFT], "axes": [], "buttons": [JOY_BUTTON_B]},
 	"jump": {"keys": [KEY_SPACE], "axes": [], "buttons": [JOY_BUTTON_X]},
 	"rest": {"keys": [KEY_E], "axes": [], "buttons": [JOY_BUTTON_A]},
+	"travel": {"keys": [KEY_F], "axes": [], "buttons": [JOY_BUTTON_Y]},  # 火を灯した篝火の近くで、別の篝火へ移る
 }
 
 

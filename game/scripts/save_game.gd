@@ -196,6 +196,28 @@ static func has_any() -> bool:
 	return areas is Dictionary and not (areas as Dictionary).is_empty()
 
 
+# 篝火に火を灯した (休んだことがある) エリアの世界の名前と、その復帰位置 (そのエリアの座標)。
+# {世界の名前: 位置 (Vector3)}。セーブがない、使えない、新しいバージョンなら、空。篝火の移動の、行き先の元になる
+static func lit_areas() -> Dictionary:
+	var result := {}
+	var path := path_for()
+	if not enabled() or not FileAccess.file_exists(path) or _stored_version(path) > VERSION:
+		return result
+	var json := JSON.new()
+	if json.parse(FileAccess.get_file_as_string(path)) != OK or not (json.data is Dictionary):
+		return result
+	var areas: Variant = (json.data as Dictionary).get("areas")
+	if not (areas is Dictionary):
+		return result
+	for id: String in areas:
+		var area: Variant = (areas as Dictionary)[id]
+		if area is Dictionary and area.get("has_rested") == true:
+			var spawn: Variant = decode_vector(area.get("spawn"))
+			if spawn != null:
+				result[id] = spawn
+	return result
+
+
 # 最後に遊んだエリアの世界の名前 (「つづきから」で、そこから始めるため)。セーブがない、使えない、書かれていない時は空
 static func current_area() -> String:
 	var path := path_for()

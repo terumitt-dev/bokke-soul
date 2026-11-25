@@ -108,3 +108,9 @@ steps:
     image: barichello/godot-ci:4.7.2
     commands:
       - sh game/tests/run.sh region_test
+
+  # 篝火の移動 (火を灯した篝火の近くで一覧を開く、同じ地域・別の地域へ移る、復帰地点は変えない) の動作テスト
+  - name: travel-test
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - sh game/tests/run.sh travel_test
