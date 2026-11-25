@@ -28,8 +28,9 @@ func _survey_of(local: Vector3, origin: Vector3) -> Array:
 	return [local.x + origin.x, -local.z + origin.y, local.y + origin.z]
 
 
-func _make_world(name: String, label: String, origin: Vector3, size: Vector3, region: String, bonfire: Variant) -> String:
-	var world := "%s/%s.glb" % [DIR, name]
+func _make_world(name: String, label: String, origin: Vector3, size: Vector3, region: String, bonfire: Variant, dir := DIR) -> String:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	var world := "%s/%s.glb" % [dir, name]
 	var file := FileAccess.open(world, FileAccess.WRITE)
 	file.store_buffer(FileAccess.get_file_as_bytes(SAMPLE))
 	file.close()
@@ -38,7 +39,7 @@ func _make_world(name: String, label: String, origin: Vector3, size: Vector3, re
 		sidecar["region"] = region
 	if bonfire != null:
 		sidecar["bonfire"] = _survey_of(bonfire, origin)
-	_write("%s/%s.json" % [DIR, name], JSON.stringify(sidecar))
+	_write("%s/%s.json" % [dir, name], JSON.stringify(sidecar))
 	return world
 
 
@@ -52,6 +53,15 @@ func _start(path: String, with_save := false) -> Node:
 	scene.get_node("World").auto_change_scene = false
 	root.add_child(scene)
 	return scene
+
+
+# 地域の残りのタイルを、全て読み込み終えるまで待つ (歩きながら、1 つずつ読み込まれる)
+func _wait_loaded(scene: Node) -> void:
+	var world: Node = scene.get_node("World")
+	var waited := 0.0
+	while not world.is_region_loaded() and waited < 20.0:
+		await create_timer(0.1).timeout
+		waited += 0.1
 
 
 func _initialize() -> void:
@@ -73,15 +83,18 @@ func _initialize() -> void:
 	var path_a := _make_world("a", "西の台地", ORIGIN, size, "test-region", ground)
 	var path_b := _make_world("b", "東の台地", origin_b + Vector3(0.0, 0.0, 3.0), size, "test-region", ground)
 	var path_x := _make_world("x", "外の地", ORIGIN - Vector3(size.x, 0.0, 0.0), size, "other-region", null)
+	var path_h := _make_world("high", "高い所", ORIGIN, size, "low-region", ground)
+	var path_l := _make_world("low", "低い所", ORIGIN + Vector3(size.x, 0.0, -100.0), size, "low-region", ground)
 	WorldLoader.arrival = {}
 
 	var entries := WorldRegistry.scan(DIR)
-	check(entries.size() == 3 and entries.filter(func(e: Dictionary) -> bool: return e.region == "test-region").size() == 2, "一覧に、地域の名前 (region) が入る")
+	check(entries.size() == 5 and entries.filter(func(e: Dictionary) -> bool: return e.region == "test-region").size() == 2, "一覧に、地域の名前 (region) が入る")
 
 	# 始める: A と、同じ地域の B が、並んで読み込まれる (X は、別の地域なので、読み込まれない)
 	var scene := _start(path_a)
 	for i in 40:
 		await physics_frame
+	await _wait_loaded(scene)
 	var world: Node = scene.get_node("World")
 	var player: CharacterBody3D = scene.get_node("Player")
 	check(world._tiles.size() == 2 and world._tiles[0].entry.world_id == "reg-a" and world._tiles[1].entry.world_id == "reg-b", "同じ地域の 2 つのタイルを、まとめて読み込む。別の地域は、読み込まない")
@@ -144,6 +157,7 @@ func _initialize() -> void:
 	var scene2 := _start(path_a, true)
 	for i in 40:
 		await physics_frame
+	await _wait_loaded(scene2)
 	var world2: Node = scene2.get_node("World")
 	var player2: CharacterBody3D = scene2.get_node("Player")
 	var b_fire: Node3D = scene2.find_child("AreaBonfire_b", true, false)
@@ -193,6 +207,7 @@ func _initialize() -> void:
 	var scene3 := _start(path_a, true)
 	for i in 40:
 		await physics_frame
+	await _wait_loaded(scene3)
 	var b_fire3: Node3D = scene3.find_child("AreaBonfire_b", true, false)
 	check(b_fire3.lit and not scene3.find_child("AreaBonfire", true, false).lit, "続きから: B の篝火は、灯ったまま。A の篝火は、灯っていない")
 	scene3.queue_free()
@@ -203,6 +218,7 @@ func _initialize() -> void:
 	var scene4 := _start(path_b, true)
 	for i in 40:
 		await physics_frame
+	await _wait_loaded(scene4)
 	var world4: Node = scene4.get_node("World")
 	var player4: CharacterBody3D = scene4.get_node("Player")
 	var a_offset: Vector3 = world4._tiles[1].offset
@@ -220,6 +236,7 @@ func _initialize() -> void:
 	var scene_u := _start(path_a, true)
 	for i in 40:
 		await physics_frame
+	await _wait_loaded(scene_u)
 	SaveGame.fail_writes = false
 	var player_u: CharacterBody3D = scene_u.get_node("Player")
 	var fire_u: Node3D = scene_u.find_child("AreaBonfire_b", true, false)
@@ -239,11 +256,10 @@ func _initialize() -> void:
 	SaveGame.allow_headless = false
 
 	# 標高の低いタイル (原点の標高が 100 m 低い): 歩いて降りても、位置を見失わない。落ちたと見なす高さは、地域でいちばん低い地面の下
-	var path_h := _make_world("high", "高い所", ORIGIN, size, "low-region", ground)
-	var path_l := _make_world("low", "低い所", ORIGIN + Vector3(size.x, 0.0, -100.0), size, "low-region", ground)
 	var scene_l := _start(path_h)
 	for i in 40:
 		await physics_frame
+	await _wait_loaded(scene_l)
 	var world_l: Node = scene_l.get_node("World")
 	var player_l: CharacterBody3D = scene_l.get_node("Player")
 	var low_offset: Vector3 = world_l._tiles[1].offset
@@ -256,12 +272,113 @@ func _initialize() -> void:
 	scene_l.queue_free()
 	await process_frame
 
+	# 読み込みは、歩きながら: 始める世界だけが先に読み込まれ、残りは、あとから 1 つずつ。読み込み中の隣は、関所ではない
+	SaveGame.directory = DIR + "/saves"
+	SaveGame.allow_headless = true
+	SaveGame.delete()
+	var scene_t: Node = load("res://scenes/world_local.tscn").instantiate()
+	var settings_t := GameSettings.new()
+	settings_t.weather_enabled = false
+	scene_t.get_node("DayNight").settings = settings_t
+	scene_t.get_node("World").world_path = path_h
+	scene_t.get_node("World").save_enabled = true
+	scene_t.get_node("World").auto_change_scene = false
+	var loaded_names := []
+	var region_done := [false]
+	scene_t.get_node("World").tile_loaded.connect(func(tile_name: String) -> void: loaded_names.append(tile_name))
+	scene_t.get_node("World").region_loaded.connect(func() -> void: region_done[0] = true)
+	root.add_child(scene_t)
+	await physics_frame
+	var world_t: Node = scene_t.get_node("World")
+	var limit_before: float = scene_t.get_node("Player").fall_limit
+	check(world_t._tiles.size() == 1 and not world_t.is_region_loaded() and loaded_names.is_empty(), "始めた直後は、始める世界のタイルだけが読み込まれている (残りは、あとから)")
+	check(world_t._exits.get("east", {}).get("world_id", "") != "reg-low", "読み込み中の隣 (同じ地域) は、関所ではない")
+	await _wait_loaded(scene_t)
+	check(world_t._tiles.size() == 2 and world_t.is_region_loaded() and region_done[0] and loaded_names == ["低い所"], "残りのタイルが、あとから読み込まれ、通知される: %s" % [loaded_names])
+	check(scene_t.get_node("Player").fall_limit < limit_before - 50.0, "あとから読み込んだ低いタイルに合わせて、落ちたと見なす高さが、決め直される (%s → %s)" % [limit_before, scene_t.get_node("Player").fall_limit])
+
+	# 当たり判定ができるまで、読み込み中のタイルへは入れない (入ると、床がなく、落ちる)。できたら、入れる
+	var player_g: CharacterBody3D = scene_t.get_node("Player")
+	check(world_t._unready.is_empty(), "(準備) 読み込み済み: 入れない範囲は、もうない")
+	scene_t.queue_free()
+	await process_frame
+	var scene_g := _start(path_h)
+	await physics_frame
+	var world_g: Node = scene_g.get_node("World")
+	var player_gate: CharacterBody3D = scene_g.get_node("Player")
+	var before_x: float = player_gate.global_position.x
+	player_gate.global_position = Vector3(size.x + 5.0, 3.0, -size.z / 2.0)  # まだ読み込み中の、東のタイルの中
+	for i in 6:
+		await physics_frame
+	check(world_g._tiles.size() == 1 and player_gate.global_position.x <= size.x and not player_gate.rescanning, "読み込み中のタイルへは、入れない (戻される): x = %.1f" % player_gate.global_position.x)
+	await _wait_loaded(scene_g)
+	player_gate.global_position = Vector3(size.x + 5.0, ground.y + world_g._tiles[1].offset.y + 2.0, -size.z / 2.0)
+	for i in 6:
+		await physics_frame
+	check(world_g._tiles.size() == 2 and player_gate.global_position.x > size.x, "読み込みが終わったら、入れる")
+	check(get_nodes_in_group("bonfire").size() == 2 and world_g._tiles[1].fire.visible, "読み込みが終わったら、その篝火も休める")
+	scene_g.queue_free()
+	await process_frame
+	var scene_w := _start(path_h)
+	var world_w: Node = scene_w.get_node("World")
+	# 読み込みの途中 (世界は読み込んだが、当たり判定を作っていて、タイルとして登録される前): そのタイルの篝火は、休めない
+	var seen_during := -1
+	var waited_frames := 0
+	while world_w._tiles.size() < 2 and waited_frames < 2000:
+		await process_frame
+		waited_frames += 1
+		if world_w._pending.is_empty() and world_w._tiles.size() == 1:
+			seen_during = get_nodes_in_group("bonfire").size()
+	check(seen_during == 1, "読み込みの途中のタイルの篝火は、休めない (タイルを登録し、記録を戻すまで): 途中の数 = %d" % seen_during)
+	scene_w.queue_free()
+	await process_frame
+	scene_t = _start(path_h, true)  # 以降の確認のために、保存ありで始め直す
+	await _wait_loaded(scene_t)
+	world_t = scene_t.get_node("World")
+
+	# 保存: 変わっていないタイルの探索地図は、PNG にし直さない (前回のものを使い回す)。遊んだタイルだけが、保存される
+	var low_tile: Dictionary = world_t._tiles[1]
+	var player_t: CharacterBody3D = scene_t.get_node("Player")
+	var home_spot := player_t.global_position
+	player_t.global_position = Vector3(size.x + 10.0, ground.y + low_tile.offset.y + 2.0, -size.z / 2.0)  # 低いタイルへ入る
+	await create_timer(1.0).timeout
+	check(world_t._entry.world_id == "reg-low" and low_tile.visited, "低いタイルに入ると、遊んだ印が付く")
+	player_t.global_position = home_spot + Vector3(0.0, 1.0, 0.0)  # 戻る (低いタイルの探索は、もう変わらない)
+	await create_timer(1.0).timeout
+	world_t.save_now()
+	var encoded_first: int = low_tile.encoded
+	await create_timer(0.3).timeout
+	world_t.save_now()
+	check(encoded_first >= 1 and low_tile.encoded == encoded_first, "遠くの、変わっていないタイルは、次の保存で、探索地図を作り直さない (%d 回)" % low_tile.encoded)
+	check(SaveGame.read(path_l).status == "ok" and SaveGame.read(path_h).status == "ok", "遊んだ 2 つのタイルとも、保存されている")
+	var home_encoded: int = world_t._tiles[0].encoded
+	player_t.global_position += Vector3(8.0, 0.0, 0.0)
+	await create_timer(0.3).timeout
+	world_t.save_now()
+	check(world_t._tiles[0].encoded > home_encoded, "いまいるタイルは、探索地図が変わったので、書き直される")
+	scene_t.queue_free()
+	await process_frame
+	SaveGame.delete()
+	SaveGame.allow_headless = false
+
+	# 読み込めなかったタイル (同じ地域): 歩いて渡れる予定から外れ、その端は、関所に戻る
+	var fail_path := _make_world("f1", "読めるタイル", ORIGIN, size, "fail-region", ground, DIR + "/fail")
+	_make_world("f2", "読めないタイル", ORIGIN + Vector3(size.x, 0.0, 0.0), size, "fail-region", null, DIR + "/fail")
+	_write(DIR + "/fail/f2.glb", "これは GLB ではありません")  # 一覧には載るが、読み込めない
+	var scene_f := _start(fail_path)
+	await _wait_loaded(scene_f)
+	var world_f: Node = scene_f.get_node("World")
+	check(world_f._tiles.size() == 1 and world_f._exits.get("east", {}).get("world_id", "") == "reg-f2", "読み込めなかった同じ地域のタイルの方向は、関所に戻る (空白のまま、残さない)")
+	scene_f.queue_free()
+	await process_frame
+
 	# 篝火の場所がないタイルにも、代わりの篝火が置かれる (始める世界以外でも。歩いて入った先で、休める)
 	var path_n1 := _make_world("n1", "無印その 1", ORIGIN, size, "plain-region", null)
 	_make_world("n2", "無印その 2", ORIGIN + Vector3(size.x, 0.0, 0.0), size, "plain-region", null)
 	var scene_n := _start(path_n1)
 	for i in 40:
 		await physics_frame
+	await _wait_loaded(scene_n)
 	var near_fire: Node3D = scene_n.find_child("StartBonfire_n2", true, false)
 	check(scene_n.find_child("StartBonfire", true, false) != null and near_fire != null and scene_n.get_node("World")._tiles[1].fire == near_fire, "篝火の場所がない、始める世界以外のタイルにも、代わりの篝火が置かれる")
 	check(near_fire != null and near_fire.global_position.x > size.x and near_fire.global_position.x < 2.0 * size.x, "代わりの篝火は、そのタイルの中にある: %s" % [near_fire.global_position if near_fire != null else null])
@@ -288,7 +405,7 @@ func _initialize() -> void:
 	scene_c.queue_free()
 	await process_frame
 
-	for sub in ["/saves", ""]:
+	for sub in ["/saves", "/fail", ""]:
 		if not DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(DIR + sub)):
 			continue
 		for file in DirAccess.get_files_at(DIR + sub):

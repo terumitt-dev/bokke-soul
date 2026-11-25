@@ -10,6 +10,7 @@ var origin := Vector2.ZERO  # 世界の水平座標 (x, z) の最小値
 var size := Vector2.ONE  # 世界の水平方向の大きさ (m)
 var cell := 0.5  # 1 画素が表す長さ (m)
 var texture: ImageTexture
+var revision := 0  # 地図が変わるたびに増える (保存で、変わったタイルだけ、書き直すため)
 
 var _image: Image
 var _dirty := false
@@ -52,6 +53,7 @@ func paint(world_position: Vector3, radius: float) -> void:
 	var x1 := mini(int(ceil(center.x + reach)), width() - 1)
 	var y0 := maxi(int(floor(center.y - reach)), 0)
 	var y1 := mini(int(ceil(center.y + reach)), height() - 1)
+	var changed := false
 	for y in range(y0, y1 + 1):
 		for x in range(x0, x1 + 1):
 			var distance := Vector2(x + 0.5, y + 0.5).distance_to(center) / reach
@@ -61,6 +63,9 @@ func paint(world_position: Vector3, radius: float) -> void:
 			if value > _image.get_pixel(x, y).r:
 				_image.set_pixel(x, y, Color(value, 0.0, 0.0))
 				_dirty = true
+				changed = true
+	if changed:
+		revision += 1
 
 
 # 世界の位置 (x, z) が、どれだけ確かめられているか (0〜1)
@@ -97,6 +102,7 @@ func load_png(bytes: PackedByteArray) -> bool:
 	image.convert(Image.FORMAT_R8)
 	_image = image
 	_dirty = true
+	revision += 1
 	update_texture()
 	return true
 
