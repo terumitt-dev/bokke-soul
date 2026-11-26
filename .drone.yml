@@ -114,3 +114,9 @@ steps:
     image: barichello/godot-ci:4.7.2
     commands:
       - sh game/tests/run.sh travel_test
+
+  # プレイヤーの見た目 (人型のモデル、背の高さ、正面の向き、武器を隠す、状態ごとの動き、読み込めない時の仮のカプセル) の動作テスト
+  - name: character-test
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - sh game/tests/run.sh character_test

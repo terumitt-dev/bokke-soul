@@ -50,6 +50,7 @@ var _model_hidden := false
 var _base_fov := 75.0
 
 @onready var model: Node3D = $Model
+@onready var character: CharacterModel = $Model/Character
 @onready var pivot: Node3D = $CameraPivot
 @onready var arm: SpringArm3D = $CameraPivot/SpringArm3D
 @onready var camera: Camera3D = $CameraPivot/SpringArm3D/Camera3D
@@ -65,6 +66,7 @@ func _ready() -> void:
 	_base_fov = camera.fov
 	prompt.text = "E: 休む"
 	prompt.visible = false
+	character.load_model()  # 人型のモデル。読み込めなければ、仮のカプセルのまま
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
@@ -145,6 +147,7 @@ func _physics_process(delta: float) -> void:
 
 	_update_camera(delta, running)
 	_update_nearby_bonfire()
+	_update_animation(on_floor)
 
 	if global_position.y < fall_limit:
 		_rescan()
@@ -216,6 +219,7 @@ func rest() -> void:
 	get_tree().call_group("point_world", "on_rest", nearby_bonfire.global_position)
 	# 休んだ知らせを先に出す。保存に失敗した時の知らせが、そのあとで上に出て、残るように
 	_show_message(_rest_message(nearby_bonfire, first_time), NOTICE_SECONDS)
+	character.play_once("rest")
 	rested.emit(nearby_bonfire.global_position)
 
 
@@ -225,6 +229,16 @@ func _rest_message(bonfire: Node3D, first_time: bool) -> String:
 	if bonfire_name.is_empty():
 		return "基準点を確定しました"
 	return "「%s」に火を灯した" % bonfire_name if first_time else "「%s」で休んだ" % bonfire_name
+
+
+# 見た目の動き: 空中なら「空中」、地上で止まっていれば「待つ」、歩く速さなら「歩く」、それより速ければ「走る」。
+# 動き出したり、跳んだりしたら、休む動き (1 回だけ) を、すぐ中断する
+func _update_animation(on_floor: bool) -> void:
+	var speed := Vector2(velocity.x, velocity.z).length()
+	var wanted := "air" if not on_floor else ("idle" if speed < 0.3 else ("walk" if speed < (WALK_SPEED + RUN_SPEED) / 2.0 else "run"))
+	if wanted != "idle":
+		character.interrupt_once()
+	character.play_state(wanted)
 
 
 # 画面に、しばらくメッセージを出す。あとから出した知らせが、前の知らせの上に出て、残る
