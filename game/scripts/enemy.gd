@@ -159,7 +159,11 @@ func _start_attack(to_target: Vector3) -> void:
 	_timer = 0.0
 	_hit_done = false
 	_face(to_target, 1.0)
-	character.play_action("attack_2", character.animation_player.get_animation(CharacterModel.ANIMATIONS["attack_2"]).length / ATTACK_TIME if character.animation_player != null else 1.0)
+	var clip: String = CharacterModel.ANIMATIONS["attack_2"]
+	var speed := 1.0
+	if character.animation_player != null and character.animation_player.has_animation(clip):
+		speed = character.animation_player.get_animation(clip).length / ATTACK_TIME  # 振る時間 (ATTACK_TIME) に合わせる
+	character.play_action("attack_2", speed)
 
 
 # 振る: 近く (少し余裕のある範囲) の、前にいるプレイヤーに、ダメージを与える。回避の最初の間は、受けられない

@@ -125,7 +125,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("rest"):
 		rest()
 	elif event.is_action_pressed("travel"):
-		if not rescanning and nearby_bonfire != null and "lit" in nearby_bonfire and nearby_bonfire.lit:
+		if not rescanning and not dead and nearby_bonfire != null and "lit" in nearby_bonfire and nearby_bonfire.lit:
 			travel_requested.emit(nearby_bonfire)
 
 
@@ -259,7 +259,7 @@ func _update_nearby_bonfire() -> void:
 
 # 篝火の近くで休むと、ここが復帰地点になる
 func rest() -> void:
-	if rescanning or nearby_bonfire == null or combat.is_busy():
+	if rescanning or dead or nearby_bonfire == null or combat.is_busy():
 		return
 	var first_time: bool = not nearby_bonfire.lit if "lit" in nearby_bonfire else not has_rested
 	spawn_position = nearby_bonfire.rest_position()

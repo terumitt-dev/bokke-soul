@@ -13,6 +13,13 @@ func check(ok: bool, label: String) -> void:
 		failures.append(label)
 
 
+func _action_event(action: String) -> InputEventAction:
+	var event := InputEventAction.new()
+	event.action = action
+	event.pressed = true
+	return event
+
+
 func _frames(count: int) -> void:
 	for i in count:
 		await physics_frame
@@ -116,6 +123,8 @@ func _initialize() -> void:
 
 	# プレイヤーが倒れる: DECEASED、動けない、最後に休んだ篝火 (復帰地点) で、体力とスタミナが戻って復活する
 	var revived := [false]
+	var travel_asked := [false]
+	player.travel_requested.connect(func(_b: Node3D) -> void: travel_asked[0] = true)
 	player.revived.connect(func() -> void: revived[0] = true)
 	player.spawn_position = player.global_position + Vector3(4.0, 0.0, 0.0)
 	combat.health = 5.0
@@ -123,6 +132,15 @@ func _initialize() -> void:
 	await _frames(5)
 	check(player.dead and player.death_banner.visible and player.death_banner.label.text == "DECEASED", "体力がなくなると、倒れて、画面に DECEASED が出る")
 	check(not combat.try_attack() and not combat.try_dodge(Vector3.RIGHT), "倒れている間は、攻撃も、回避もできない")
+	var rest_before: Vector3 = player.spawn_position
+	var fire := Bonfire.new()
+	fire.lit = true  # 火が灯っていて、移動もできる篝火
+	player.nearby_bonfire = fire
+	player.rest()
+	player._unhandled_input(_action_event("travel"))
+	check(player.spawn_position == rest_before and not travel_asked[0], "倒れている間は、休めない。移動もできない")
+	fire.free()
+	player.nearby_bonfire = null
 	await create_timer(0.4).timeout
 	check(is_zero_approx(player.velocity.x) and is_zero_approx(player.velocity.z), "倒れている間は、動けない")
 	var spawn: Vector3 = player.spawn_position
