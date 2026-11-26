@@ -9,7 +9,7 @@ extends Node3D
 const MODEL_PATH := "res://assets/characters/kaykit/Rogue_Hooded.glb"
 const WEAPON_PATH := "res://assets/characters/kaykit/weapons/sword_1handed.gltf"  # 右手に持つ武器
 const HAND_SLOT := "handslot_r"  # モデルの、右手の武器の付け根
-const HEIGHT := 1.8  # 立った時の背の高さ (m)。モデルを、この高さに合わせる
+const HEIGHT := 1.8  # 立った時の背の高さ (m)。モデルを、この高さに合わせる (既定)
 const BLEND := 0.15  # 動きの切り替えで、混ぜる時間 (秒)
 
 # 状態 → 動きの名前
@@ -32,8 +32,15 @@ const ANIMATIONS := {
 	"death": "Death_A",
 }
 # 手に持つ武器 (手のスロットに付いている)。いまは持たせないので、隠す。戦闘の土台で、持たせる
-const WEAPON_PARTS := ["Knife_Offhand", "1H_Crossbow", "2H_Crossbow", "Knife", "Throwable"]
+const WEAPON_PARTS: Array[String] = ["Knife_Offhand", "1H_Crossbow", "2H_Crossbow", "Knife", "Throwable"]
 const LOOPING := ["idle", "walk", "run", "air"]  # くり返す動き。ほかは、1 回だけ
+
+# このノードごとの設定 (既定は、プレイヤー)。敵は、別のモデルと武器を設定する
+@export var model_path := MODEL_PATH
+@export var weapon_path := WEAPON_PATH
+@export var weapon_slot := HAND_SLOT  # 武器の付け根。モデルのノードの名前、または、骨の名前
+@export var height := HEIGHT
+@export var weapon_parts: Array[String] = WEAPON_PARTS  # 最初から付いている武器の部品 (隠す)
 
 var model: Node3D  # 読み込んだモデル。なければ null
 var animation_player: AnimationPlayer
@@ -45,7 +52,9 @@ var _once_until := 0.0  # 1 回だけの動き (休むなど) を、流してい
 
 
 # path のモデルを読み込んで、背の高さを合わせ、正面を -Z (このゲームの前) に向ける。成功したら true
-func load_model(path: String = MODEL_PATH) -> bool:
+func load_model(path: String = "") -> bool:
+	if path.is_empty():
+		path = model_path
 	if not ResourceLoader.exists(path):
 		return false
 	var scene: PackedScene = load(path)
@@ -64,7 +73,7 @@ func load_model(path: String = MODEL_PATH) -> bool:
 			if animation != null:
 				animation.loop_mode = Animation.LOOP_LINEAR if key in LOOPING else Animation.LOOP_NONE
 	for mesh: MeshInstance3D in model.find_children("*", "MeshInstance3D", true, false):
-		if mesh.name in WEAPON_PARTS:
+		if mesh.name in weapon_parts:
 			mesh.visible = false
 	attach_weapon()
 	for fallback in get_parent().find_children("Body", "MeshInstance3D", false, false) + get_parent().find_children("Facing", "MeshInstance3D", false, false):
@@ -73,10 +82,12 @@ func load_model(path: String = MODEL_PATH) -> bool:
 
 
 # 右手の付け根 (HAND_SLOT) に、武器を持たせる。読み込めない、付け根がなければ、false
-func attach_weapon(path: String = WEAPON_PATH) -> bool:
-	if model == null or not ResourceLoader.exists(path):
+func attach_weapon(path: String = "") -> bool:
+	if path.is_empty():
+		path = weapon_path
+	if model == null or path.is_empty() or not ResourceLoader.exists(path):
 		return false
-	var slot := model.find_child(HAND_SLOT, true, false)
+	var slot := _slot()
 	var scene: PackedScene = load(path)
 	if slot == null or scene == null:
 		return false
@@ -86,6 +97,21 @@ func attach_weapon(path: String = WEAPON_PATH) -> bool:
 	weapon.name = "Weapon"
 	slot.add_child(weapon)
 	return true
+
+
+# 武器の付け根。モデルの中に、その名前のノードがあればそれ。なければ、その名前の骨に、付け根のノードを作る。なければ null
+func _slot() -> Node3D:
+	var node := model.find_child(weapon_slot, true, false)
+	if node is Node3D:
+		return node
+	for skeleton: Skeleton3D in model.find_children("*", "Skeleton3D", true, false):
+		if skeleton.find_bone(weapon_slot) >= 0:
+			var attachment := BoneAttachment3D.new()
+			attachment.name = "WeaponSlot"
+			attachment.bone_name = weapon_slot
+			skeleton.add_child(attachment)
+			return attachment
+	return null
 
 
 # 戦闘の動き (攻撃、回避など。ANIMATIONS の名前) を、speed 倍の速さで、1 回流す。動きの長さ (秒) を返す。
@@ -104,7 +130,7 @@ func play_action(new_state: String, speed := 1.0) -> float:
 # 転がる: 体全体を、重心 (高さの半分) の周りに、前へ progress (0〜1) 回転させる。体は、このノードの正面 (-Z) の向きへ転がる
 func set_roll(progress: float) -> void:
 	var basis := Basis(Vector3.RIGHT, -TAU * clampf(progress, 0.0, 1.0))
-	var center := Vector3(0.0, HEIGHT / 2.0, 0.0)
+	var center := Vector3(0.0, height / 2.0, 0.0)
 	transform = Transform3D(basis, center - basis * center)
 
 
@@ -162,13 +188,13 @@ func _fit_height() -> void:
 	var high := -INF
 	var to_self := global_transform.affine_inverse()
 	for mesh: MeshInstance3D in model.find_children("*", "MeshInstance3D", true, false):
-		if mesh.name in WEAPON_PARTS:
+		if mesh.name in weapon_parts:
 			continue  # 武器は、背の高さに入れない
 		var box: AABB = (to_self * mesh.global_transform) * mesh.get_aabb()
 		low = minf(low, box.position.y)
 		high = maxf(high, box.end.y)
 	if high <= low:
 		return
-	var scale_factor := HEIGHT / (high - low)
+	var scale_factor := height / (high - low)
 	model.scale = Vector3.ONE * scale_factor
 	model.position.y = -low * scale_factor

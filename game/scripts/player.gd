@@ -24,11 +24,13 @@ const RUN_FOV_BOOST := 8.0  # 走っている間、視野を広げる量 (度)�
 const FOV_SPEED := 6.0
 const FALL_LIMIT := -20.0
 const RESCAN_SECONDS := 1.5
+const DEATH_SECONDS := 3.0  # 倒れてから、復活の演出に入るまで (「DECEASED」を見せる時間)
 const REST_DISTANCE := 2.5
 const NOTICE_SECONDS := 1.5
 
 # 篝火で休んだ時 (position は篝火の位置)。セーブなどが聞く
 signal rested(position: Vector3)
+signal revived  # 倒れてから、最後に休んだ篝火で復活した
 signal travel_requested(bonfire: Node3D)  # 火を灯した篝火の近くで、移動の操作をした
 
 # 入力を受け付けない (移動の一覧を開いている間)。重力だけが効く
@@ -55,6 +57,8 @@ var _base_fov := 75.0
 @onready var model: Node3D = $Model
 @onready var character: CharacterModel = $Model/Character
 var combat: PlayerCombat  # 戦闘 (攻撃、回避、スタミナ、体力)
+var dead := false  # 倒れている (体力がなくなってから、復活するまで)
+var death_banner: DeathBanner
 var vitals: Vitals  # 体力とスタミナの棒
 @onready var pivot: Node3D = $CameraPivot
 @onready var arm: SpringArm3D = $CameraPivot/SpringArm3D
@@ -77,6 +81,10 @@ func _ready() -> void:
 	combat.name = "Combat"
 	add_child(combat)
 	combat.setup(self, character)
+	combat.died.connect(_on_died)
+	death_banner = DeathBanner.new()
+	get_node("../HUD").add_child(death_banner)
+	add_to_group("player")  # 敵が、見つける
 	vitals = Vitals.new()
 	get_node("../HUD").add_child(vitals)
 	vitals.bind(combat)
@@ -125,6 +133,14 @@ func _physics_process(delta: float) -> void:
 	if rescanning:
 		return
 	combat.tick(delta)
+	if dead:
+		# 倒れている間は、動けない (重力だけ)
+		velocity.x = 0.0
+		velocity.z = 0.0
+		if not is_on_floor():
+			velocity.y -= gravity * delta
+		move_and_slide()
+		return
 	if input_blocked:
 		velocity.x = 0.0
 		velocity.z = 0.0
@@ -270,6 +286,8 @@ func _rest_message(bonfire: Node3D, first_time: bool) -> String:
 # 見た目の動き: 空中なら「空中」、地上で止まっていれば「待つ」、歩く速さなら「歩く」、それより速ければ「走る」。
 # 動き出したり、跳んだりしたら、休む動き (1 回だけ) を、すぐ中断する
 func _update_animation(on_floor: bool) -> void:
+	if combat.is_dead():
+		return  # 倒れている間は、倒れた姿のまま
 	var speed := Vector2(velocity.x, velocity.z).length()
 	var wanted := "air" if not on_floor else ("idle" if speed < 0.3 else ("walk" if speed < (WALK_SPEED + RUN_SPEED) / 2.0 else "run"))
 	if wanted != "idle":
@@ -284,15 +302,30 @@ func notice(text: String, seconds: float) -> void:
 
 
 # 床の下へ落ちたら、位置を見失った演出を出して最後に休んだ篝火へ戻す
-func _rescan() -> void:
+func _rescan(message := "位置を見失いました。再スキャン中…") -> void:
 	rescanning = true
 	prompt.visible = false
 	get_tree().call_group("point_world", "on_lost")  # 世界が崩れ始める
-	await _show_message("位置を見失いました。再スキャン中…", RESCAN_SECONDS)
+	await _show_message(message, RESCAN_SECONDS)
 	global_position = spawn_position
 	velocity = Vector3.ZERO
 	get_tree().call_group("point_world", "on_rescan", spawn_position)  # 篝火から、波が広がって、再構成される
 	rescanning = false
+
+
+# 体力がなくなった。「DECEASED」を見せたあと、最後に休んだ篝火へ戻って (再スキャンの演出)、体力とスタミナを戻して、復活する
+func _on_died() -> void:
+	dead = true
+	prompt.visible = false
+	death_banner.show_banner()
+	await get_tree().create_timer(DEATH_SECONDS).timeout
+	if not is_inside_tree():
+		return
+	death_banner.hide_banner()
+	await _rescan("再スキャン中…")
+	combat.revive()
+	dead = false
+	revived.emit()
 
 
 # 一定時間メッセージを出す。後から別のメッセージが出ていたら、消さない

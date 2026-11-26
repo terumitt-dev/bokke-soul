@@ -120,7 +120,7 @@ func apply_credit(info: Dictionary) -> void:
 	body.append("  https://www.openstreetmap.org/copyright")
 	body.append("")
 	body.append("キャラクター")
-	body.append("  KayKit : Adventurers Character Pack (Kay Lousberg, www.kaylousberg.com)")
+	body.append("  KayKit : Adventurers / Skeletons Character Pack (Kay Lousberg, www.kaylousberg.com)")
 	body.append("  CC0 (パブリックドメイン)")
 	body.append("")
 	body.append("書体")

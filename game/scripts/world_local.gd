@@ -72,6 +72,7 @@ var _traveling := false
 var _overlay: CanvasLayer
 var _veil: ColorRect
 var _veil_label: Label
+var _enemy_spot := Vector3.ZERO  # 敵の、最初にいる場所
 var _menu: TravelMenu
 var _menu_destinations: Array[Dictionary] = []
 
@@ -122,6 +123,7 @@ func _ready() -> void:
 		home["fire"] = _add_start_bonfire(home.meshes, start)  # 始まりの篝火も、タイルの篝火として、火の状態を持つ
 	_update_fall_limit()
 	_add_training_dummy(home)
+	_add_enemy(home)
 
 	_place_arrival(home.meshes)
 	_setup_points_position = player.global_position  # テスト用: 探索地図を作る時の、プレイヤーの位置
@@ -177,6 +179,39 @@ func _add_training_dummy(home: Dictionary) -> void:
 	dummy.name = "TrainingDummy"
 	add_child(dummy)
 	dummy.global_position = Vector3(spot.x, heights[0], spot.z)
+
+
+# 敵 (骸骨) を 1 体、始める世界の篝火の、少し離れた所に置く。仮の置き方 (配置の仕組みができたら、そちらへ移す)。
+# プレイヤーが休んだ時と、倒れて復活した時に、立て直す (倒していれば、また現れる)
+func _add_enemy(home: Dictionary) -> void:
+	var fire: Node3D = home.fire
+	if fire == null:
+		return
+	var spot: Vector3 = fire.global_position + Vector3(-7.0, 0.0, -9.0)
+	var heights := WorldLoader.surface_heights(home.meshes, spot.x, spot.z)
+	if heights.is_empty():
+		return
+	heights.sort_custom(func(a: float, b: float) -> bool: return absf(a - fire.global_position.y) < absf(b - fire.global_position.y))
+	_enemy_spot = Vector3(spot.x, heights[0] + 0.05, spot.z)
+	_spawn_enemy()
+	player.rested.connect(func(_position: Vector3) -> void: _reset_enemies())
+	player.revived.connect(_reset_enemies)
+
+
+func _spawn_enemy() -> void:
+	var enemy := Enemy.new()
+	enemy.name = "Enemy"
+	add_child(enemy)
+	enemy.global_position = _enemy_spot
+	enemy.spawn_position = _enemy_spot
+
+
+# 敵を、最初の状態に戻す。倒した敵は、また現れる
+func _reset_enemies() -> void:
+	for enemy: Enemy in get_tree().get_nodes_in_group("enemy"):
+		enemy.reset()
+	if _enemy_spot != Vector3.ZERO and get_tree().get_nodes_in_group("enemy").filter(func(e: Node) -> bool: return e.state != Enemy.State.DEAD).is_empty():
+		_spawn_enemy()
 
 
 # 当たり判定 (面ごとの三角形の形) を、少しずつ作る。三角形を、東西に COLLISION_STRIPS 本の帯に分ける作業は、別のスレッドで行い、
@@ -493,10 +528,14 @@ func _on_travel_requested(here: Node3D) -> void:
 		names.append(destination.label)
 	_menu = TravelMenu.new()
 	add_child(_menu)
+	var was_captured: bool = player.mouse_captured  # 開く前に、マウスを握っていたか (閉じたら、一覧が、その状態に戻す)
 	player.input_blocked = true
-	_menu.chosen.connect(_on_travel_chosen)
+	_menu.chosen.connect(func(index: int) -> void:
+		player.mouse_captured = was_captured
+		_on_travel_chosen(index))
 	_menu.closed.connect(func() -> void:
 		player.input_blocked = false
+		player.mouse_captured = was_captured
 		_menu = null)
 	_menu.open(names)
 

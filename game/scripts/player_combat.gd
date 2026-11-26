@@ -62,6 +62,24 @@ func is_dodging() -> bool:
 	return _action == "dodge"
 
 
+func is_dead() -> bool:
+	return health <= 0.0
+
+
+# 復活する: 体力とスタミナを、満タンに戻し、動作を終える
+func revive() -> void:
+	health = MAX_HEALTH
+	stamina = MAX_STAMINA
+	_action = ""
+	_queued = false
+	_combo_left = 0.0
+	_invulnerable_left = 0.0
+	dodge_velocity = Vector2.ZERO
+	_end_roll()
+	_character.end_action()
+	changed.emit()
+
+
 func is_invulnerable() -> bool:
 	return _invulnerable_left > 0.0
 
@@ -95,18 +113,18 @@ func try_dodge(direction: Vector3 = Vector3.ZERO) -> bool:
 	if not _rolling:
 		along = -facing
 	along = along.normalized()
-	var name := "roll"
+	var dodge_state := "roll"
 	if _rolling:
 		_player.model.rotation.y = atan2(-along.x, -along.z)  # 転がる向きへ、体を向ける (転がるのは、体の前へ)
 	else:
-		name = "dodge_backward"
+		dodge_state = "dodge_backward"
 	_action = "dodge"
 	_action_time = 0.0
 	_action_length = DODGE_TIME
 	_invulnerable_left = DODGE_INVULNERABLE
 	dodge_velocity = Vector2(along.x, along.z) * DODGE_SPEED
 	_character.end_action()
-	_character.play_action(name, _character_length_speed(name))
+	_character.play_action(dodge_state, _character_length_speed(dodge_state))
 	if _rolling:
 		_character.set_roll(0.0)
 	dodged.emit()
@@ -219,8 +237,8 @@ func _facing() -> Vector3:
 
 
 # 回避の動きの速さ (倍)。動きの長さが DODGE_TIME に合うようにする
-func _character_length_speed(name: String) -> float:
-	var animation_name: String = CharacterModel.ANIMATIONS.get(name, "")
+func _character_length_speed(state_name: String) -> float:
+	var animation_name: String = CharacterModel.ANIMATIONS.get(state_name, "")
 	if _character.animation_player == null or not _character.animation_player.has_animation(animation_name):
 		return 1.0
 	return _character.animation_player.get_animation(animation_name).length / DODGE_TIME

@@ -126,6 +126,18 @@ func _initialize() -> void:
 	check(is_instance_valid(world._menu) and world._menu.is_open() and player.input_blocked, "閉じたあとも、もう一度、一覧を開ける (解放済みの一覧を触らない)")
 	world._menu._unhandled_input(_action("ui_cancel"))
 	await process_frame
+	# マウスを握っていた状態は、一覧を閉じると、元に戻る (握っていなければ、握らないまま)
+	player.mouse_captured = true
+	player._unhandled_input(_action("travel"))
+	player.mouse_captured = false  # 一覧を開いている間に、ウィンドウの外へ出て、印が下りた時 (player.gd の focus-out と同じ)
+	world._menu._unhandled_input(_action("ui_cancel"))
+	await process_frame
+	check(player.mouse_captured, "マウスを握っていた時は、一覧を閉じると、握った状態に戻る (開いている間に印が下りても)")
+	player.mouse_captured = false
+	player._unhandled_input(_action("travel"))
+	world._menu._unhandled_input(_action("ui_cancel"))
+	await process_frame
+	check(not player.mouse_captured, "マウスを握っていなかった時は、一覧を閉じても、握らない")
 
 	# B の篝火にも火を灯して、A に戻って休む (復帰地点は、A)
 	player.global_position = fire_b.global_position + Vector3(0.5, 0.5, 0.0)
