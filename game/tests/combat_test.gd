@@ -115,10 +115,25 @@ func _initialize() -> void:
 	check(is_equal_approx(combat.stamina, PlayerCombat.MAX_STAMINA - PlayerCombat.DODGE_COST), "回避で、スタミナを使う")
 	check(not player.take_damage(10.0) and is_equal_approx(combat.health, PlayerCombat.MAX_HEALTH), "回避の最初の間は、攻撃を受けない")
 	check(not player.combat.try_dodge(Vector3.RIGHT), "回避の最中に、重ねて回避はできない")
+	check(character.state == "roll" and absf(player.model.rotation.y - atan2(-1.0, 0.0)) < 0.01, "向きの入力があれば、その向きへ体を向けて、転がる (%s)" % character.state)
+	await create_timer(0.25).timeout
+	check(not character.transform.basis.is_equal_approx(Basis.IDENTITY), "転がっている間は、体が、前へ回っている")
 	await create_timer(0.7).timeout
+	check(not combat.is_dodging() and character.transform.basis.is_equal_approx(Basis.IDENTITY), "転がり終わると、体は、元の向きに戻る")
 	check(not combat.is_dodging() and absf(player.global_position.x - start.x) > 2.0, "回避で、指定の向きへ、進む (%.1f m)" % (player.global_position.x - start.x))
 	check(player.take_damage(10.0) and is_equal_approx(combat.health, PlayerCombat.MAX_HEALTH - 10.0), "回避が終われば、ダメージを受ける (体力 %.0f)" % combat.health)
 	check(is_equal_approx(player.vitals.health_bar.size.x, Vitals.BAR_WIDTH * 0.9), "体力の棒が、減る")
+
+	# 向きの入力がなければ、後ろへ飛びのく (転がらない)
+	await create_timer(1.0).timeout
+	combat.stamina = PlayerCombat.MAX_STAMINA
+	var back_start := player.global_position
+	var facing_before: float = player.model.rotation.y
+	check(combat.try_dodge(Vector3.ZERO) and character.state == "dodge_backward", "向きの入力がなければ、後ろへ飛びのく (%s)" % character.state)
+	await create_timer(0.2).timeout
+	check(character.transform.basis.is_equal_approx(Basis.IDENTITY) and is_equal_approx(player.model.rotation.y, facing_before), "飛びのく時は、転がらず、体の向きも変わらない")
+	await create_timer(0.6).timeout
+	check(player.global_position.distance_to(back_start) > 2.0, "後ろへ、進む (%.1f m)" % player.global_position.distance_to(back_start))
 
 	# 動作中は、休めない・跳べない
 	await create_timer(1.0).timeout

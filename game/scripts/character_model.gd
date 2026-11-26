@@ -27,6 +27,7 @@ const ANIMATIONS := {
 	"dodge_backward": "Dodge_Backward",
 	"dodge_left": "Dodge_Left",
 	"dodge_right": "Dodge_Right",
+	"roll": "Sit_Floor_Idle",  # 転がる時の、体を丸めた姿 (モデルに、転がる動きはない。体全体を、前へ 1 回転させて、転がって見せる)
 	"hit": "Hit_A",
 	"death": "Death_A",
 }
@@ -98,6 +99,18 @@ func play_action(new_state: String, speed := 1.0) -> float:
 	state = new_state
 	animation_player.play(name, BLEND, speed)
 	return length
+
+
+# 転がる: 体全体を、重心 (高さの半分) の周りに、前へ progress (0〜1) 回転させる。体は、このノードの正面 (-Z) の向きへ転がる
+func set_roll(progress: float) -> void:
+	var basis := Basis(Vector3.RIGHT, -TAU * clampf(progress, 0.0, 1.0))
+	var center := Vector3(0.0, HEIGHT / 2.0, 0.0)
+	transform = Transform3D(basis, center - basis * center)
+
+
+# 転がるのをやめて、体を元の向きに戻す
+func end_roll() -> void:
+	transform = Transform3D.IDENTITY
 
 
 # 戦闘の動きを流しているか

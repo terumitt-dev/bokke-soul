@@ -46,6 +46,7 @@ var _queued := false  # 攻撃の最中に、もう一度押した (終わった
 var _regen_wait := 0.0
 var _invulnerable_left := 0.0
 var _hit_done := {}  # この攻撃で、すでに当てた的
+var _rolling := false  # 回避が、転がる形か (向きの入力がある時)。ない時は、後ろへの飛びのき
 
 
 func setup(player: CharacterBody3D, character: CharacterModel) -> void:
@@ -90,13 +91,15 @@ func try_dodge(direction: Vector3 = Vector3.ZERO) -> bool:
 	var facing := _facing()
 	var along := direction
 	along.y = 0.0
-	if along.length() < 0.1:
-		along = -facing  # 向きの入力がなければ、後ろへ
+	_rolling = along.length() >= 0.1  # 向きの入力があれば、その向きへ転がる。なければ、後ろへ飛びのく
+	if not _rolling:
+		along = -facing
 	along = along.normalized()
-	# 体の向きから見て、前、後ろ、左、右のどれか
-	var forward_amount := along.dot(facing)
-	var side_amount := along.dot(facing.cross(Vector3.UP))
-	var name := "dodge_forward" if forward_amount > 0.7 else ("dodge_backward" if forward_amount < -0.7 else ("dodge_right" if side_amount > 0.0 else "dodge_left"))
+	var name := "roll"
+	if _rolling:
+		_player.model.rotation.y = atan2(-along.x, -along.z)  # 転がる向きへ、体を向ける (転がるのは、体の前へ)
+	else:
+		name = "dodge_backward"
 	_action = "dodge"
 	_action_time = 0.0
 	_action_length = DODGE_TIME
@@ -104,6 +107,8 @@ func try_dodge(direction: Vector3 = Vector3.ZERO) -> bool:
 	dodge_velocity = Vector2(along.x, along.z) * DODGE_SPEED
 	_character.end_action()
 	_character.play_action(name, _character_length_speed(name))
+	if _rolling:
+		_character.set_roll(0.0)
 	dodged.emit()
 	return true
 
@@ -117,6 +122,7 @@ func take_damage(amount: float, _source: Node = null) -> bool:
 	if health <= 0.0:
 		_action = ""
 		dodge_velocity = Vector2.ZERO
+		_end_roll()
 		_character.end_action()
 		_character.play_action("death")
 		died.emit()
@@ -143,10 +149,20 @@ func tick(delta: float) -> void:
 			_apply_hits(ATTACKS[_index])
 		if _action_time >= _action_length:
 			_finish_attack()
-	elif _action_time >= _action_length:
-		_action = ""
-		dodge_velocity = Vector2.ZERO
-		_regen_wait = REGEN_DELAY
+	else:
+		if _rolling:
+			_character.set_roll(_action_time / _action_length)
+		if _action_time >= _action_length:
+			_action = ""
+			dodge_velocity = Vector2.ZERO
+			_end_roll()
+			_regen_wait = REGEN_DELAY
+
+
+func _end_roll() -> void:
+	if _rolling:
+		_rolling = false
+		_character.end_roll()
 
 
 func _start_attack(index: int, aim: Vector3) -> void:
