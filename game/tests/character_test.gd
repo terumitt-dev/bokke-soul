@@ -14,6 +14,20 @@ func check(ok: bool, label: String) -> void:
 
 
 func _initialize() -> void:
+	# プレイヤーが、場面の中で、高い所に置かれていても、足は、プレイヤーの足元にある (測る座標が、場面の原点でない)
+	var high_scene: Node = load("res://scenes/main.tscn").instantiate()
+	high_scene.get_node("Player").position = Vector3(30.0, 7.0, -40.0)
+	root.add_child(high_scene)
+	await process_frame
+	var high_player: CharacterBody3D = high_scene.get_node("Player")
+	var feet := INF
+	for mesh: MeshInstance3D in high_player.character.model.find_children("*", "MeshInstance3D", true, false):
+		if not (mesh.name in CharacterModel.WEAPON_PARTS):
+			feet = minf(feet, (mesh.global_transform * mesh.get_aabb()).position.y)
+	check(absf(feet - high_player.global_position.y) < 0.15, "プレイヤーが、場面の高い所 (y = 7) に置かれていても、足は、プレイヤーの足元にある (差 %.2f)" % (feet - high_player.global_position.y))
+	high_scene.queue_free()
+	await process_frame
+
 	var scene: Node = load("res://scenes/main.tscn").instantiate()
 	root.add_child(scene)
 	var player: CharacterBody3D = scene.get_node("Player")

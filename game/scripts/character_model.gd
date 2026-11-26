@@ -86,14 +86,16 @@ func _play(new_state: String) -> void:
 	animation_player.play(name, BLEND)
 
 
-# モデルの高さ (頭のてっぺんと足の差) を HEIGHT に合わせ、足を地面 (y = 0) に置く
+# モデルの高さ (頭のてっぺんと足の差) を HEIGHT に合わせ、足を地面 (y = 0) に置く。
+# 高さは、このノードから見た座標で測る (プレイヤーが、場面のどこにいても、同じ結果になる)
 func _fit_height() -> void:
 	var low := INF
 	var high := -INF
+	var to_self := global_transform.affine_inverse()
 	for mesh: MeshInstance3D in model.find_children("*", "MeshInstance3D", true, false):
 		if mesh.name in WEAPON_PARTS:
 			continue  # 武器は、背の高さに入れない
-		var box: AABB = mesh.global_transform * mesh.get_aabb() if mesh.is_inside_tree() else (model.transform * mesh.transform) * mesh.get_aabb()
+		var box: AABB = (to_self * mesh.global_transform) * mesh.get_aabb()
 		low = minf(low, box.position.y)
 		high = maxf(high, box.end.y)
 	if high <= low:
