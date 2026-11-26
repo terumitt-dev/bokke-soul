@@ -121,6 +121,7 @@ func _ready() -> void:
 		player.spawn_position = start
 		home["fire"] = _add_start_bonfire(home.meshes, start)  # 始まりの篝火も、タイルの篝火として、火の状態を持つ
 	_update_fall_limit()
+	_add_training_dummy(home)
 
 	_place_arrival(home.meshes)
 	_setup_points_position = player.global_position  # テスト用: 探索地図を作る時の、プレイヤーの位置
@@ -159,6 +160,23 @@ func _stream_tiles() -> void:
 		_attach_tile(tile)
 	_streaming = false
 	region_loaded.emit()
+
+
+# 戦闘を試すための的 (仮)。始める世界の篝火の、少し横に置く。地面の高さは、メッシュの面から求める。
+# 戦闘の土台のためだけの、仮のもの。置き方は、配置の仕組みができたら、そちらへ移す
+func _add_training_dummy(home: Dictionary) -> void:
+	var fire: Node3D = home.fire
+	if fire == null:
+		return
+	var spot: Vector3 = fire.global_position + Vector3(3.5, 0.0, -1.0)
+	var heights := WorldLoader.surface_heights(home.meshes, spot.x, spot.z)
+	if heights.is_empty():
+		return
+	heights.sort_custom(func(a: float, b: float) -> bool: return absf(a - fire.global_position.y) < absf(b - fire.global_position.y))
+	var dummy := TrainingDummy.new()
+	dummy.name = "TrainingDummy"
+	add_child(dummy)
+	dummy.global_position = Vector3(spot.x, heights[0], spot.z)
 
 
 # 当たり判定 (面ごとの三角形の形) を、少しずつ作る。三角形を、東西に COLLISION_STRIPS 本の帯に分ける作業は、別のスレッドで行い、

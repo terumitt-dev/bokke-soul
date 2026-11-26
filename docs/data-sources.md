@@ -98,7 +98,7 @@
 | 取得元 | https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Adventures-1.0 (配布元の GitHub。`Characters/gltf/Rogue_Hooded.glb`) |
 | ライセンス | CC0 1.0 (パブリックドメイン)。配布元の LICENSE.txt: 「個人、教育、商用のプロジェクトで、自由に使える」。出典の表示は、任意 (必須ではない) |
 | 取得日 | 2026-11-26 |
-| 置き場 | `game/assets/characters/kaykit/` (モデル 1 つと、配布元の LICENSE.txt) |
+| 置き場 | `game/assets/characters/kaykit/` (モデル 1 つと、配布元の LICENSE.txt。武器は、`weapons/` に、片手剣 `sword_1handed` と、その質感) |
 | 加工 | モデルは、そのまま。ゲームで、背の高さを 1.8 m に合わせ、手に持つ武器を隠し、動き (待つ、歩く、走る、空中、休む) の対応を付ける |
 | 出典表示 | ゲームのクレジットに、載せている (任意。作者への敬意として) |
 

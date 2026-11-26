@@ -7,6 +7,8 @@ extends Node3D
 # モデルを変えたら、ANIMATIONS の対応を、そのモデルの名前に直す
 
 const MODEL_PATH := "res://assets/characters/kaykit/Rogue_Hooded.glb"
+const WEAPON_PATH := "res://assets/characters/kaykit/weapons/sword_1handed.gltf"  # 右手に持つ武器
+const HAND_SLOT := "handslot_r"  # モデルの、右手の武器の付け根
 const HEIGHT := 1.8  # 立った時の背の高さ (m)。モデルを、この高さに合わせる
 const BLEND := 0.15  # 動きの切り替えで、混ぜる時間 (秒)
 
@@ -17,6 +19,16 @@ const ANIMATIONS := {
 	"run": "Running_A",
 	"air": "Jump_Idle",
 	"rest": "Interact",
+	# 戦闘の動き (1 回だけ)
+	"attack_1": "1H_Melee_Attack_Slice_Diagonal",
+	"attack_2": "1H_Melee_Attack_Chop",
+	"attack_3": "1H_Melee_Attack_Slice_Horizontal",
+	"dodge_forward": "Dodge_Forward",
+	"dodge_backward": "Dodge_Backward",
+	"dodge_left": "Dodge_Left",
+	"dodge_right": "Dodge_Right",
+	"hit": "Hit_A",
+	"death": "Death_A",
 }
 # 手に持つ武器 (手のスロットに付いている)。いまは持たせないので、隠す。戦闘の土台で、持たせる
 const WEAPON_PARTS := ["Knife_Offhand", "1H_Crossbow", "2H_Crossbow", "Knife", "Throwable"]
@@ -26,6 +38,8 @@ var model: Node3D  # 読み込んだモデル。なければ null
 var animation_player: AnimationPlayer
 var state := ""  # いま流している状態
 
+var weapon: Node3D  # 右手に持っている武器。なければ null
+var _action_until := 0.0  # 戦闘の動き (攻撃、回避など) を流している間は、状態の切り替えを待つ。この時刻 (ミリ秒) まで
 var _once_until := 0.0  # 1 回だけの動き (休むなど) を、流している間は、状態の切り替えを待つ。この時刻 (ミリ秒) まで
 
 
@@ -51,15 +65,57 @@ func load_model(path: String = MODEL_PATH) -> bool:
 	for mesh: MeshInstance3D in model.find_children("*", "MeshInstance3D", true, false):
 		if mesh.name in WEAPON_PARTS:
 			mesh.visible = false
+	attach_weapon()
 	for fallback in get_parent().find_children("Body", "MeshInstance3D", false, false) + get_parent().find_children("Facing", "MeshInstance3D", false, false):
 		fallback.visible = false  # 仮のカプセルは、隠す
 	return true
+
+
+# 右手の付け根 (HAND_SLOT) に、武器を持たせる。読み込めない、付け根がなければ、false
+func attach_weapon(path: String = WEAPON_PATH) -> bool:
+	if model == null or not ResourceLoader.exists(path):
+		return false
+	var slot := model.find_child(HAND_SLOT, true, false)
+	var scene: PackedScene = load(path)
+	if slot == null or scene == null:
+		return false
+	if weapon != null:
+		weapon.queue_free()
+	weapon = scene.instantiate()
+	weapon.name = "Weapon"
+	slot.add_child(weapon)
+	return true
+
+
+# 戦闘の動き (攻撃、回避など。ANIMATIONS の名前) を、speed 倍の速さで、1 回流す。動きの長さ (秒) を返す。
+# 流している間は、待つ・歩く・走るに切り替わらない。モデルがない、その動きがない時も、長さ (0.5 秒) は返す (戦闘の流れは、動かせる)
+func play_action(new_state: String, speed := 1.0) -> float:
+	var name: String = ANIMATIONS.get(new_state, "")
+	if animation_player == null or name.is_empty() or not animation_player.has_animation(name):
+		return 0.5 / maxf(speed, 0.01)
+	var length := animation_player.get_animation(name).length / maxf(speed, 0.01)
+	_action_until = Time.get_ticks_msec() + length * 1000.0
+	state = new_state
+	animation_player.play(name, BLEND, speed)
+	return length
+
+
+# 戦闘の動きを流しているか
+func is_acting() -> bool:
+	return Time.get_ticks_msec() < _action_until
+
+
+# 戦闘の動きを、中断する (次の動きへ、すぐ移る時)
+func end_action() -> void:
+	_action_until = 0.0
 
 
 # 状態 (idle、walk、run、air) の動きを流す。同じ状態なら、何もしない。rest などの 1 回だけの動きの間は、待つ
 func play_state(new_state: String) -> void:
 	if animation_player == null or new_state == state:
 		return
+	if is_acting():
+		return  # 戦闘の動きの途中
 	if Time.get_ticks_msec() < _once_until and new_state in ["idle", "walk", "run"]:
 		return  # 休む動きの途中。動き出したら、すぐ戻る (下で)
 	_play(new_state)
