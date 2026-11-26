@@ -22,6 +22,9 @@ const ACTIONS := {
 	"jump": {"keys": [KEY_SPACE], "axes": [], "buttons": [JOY_BUTTON_X]},
 	"rest": {"keys": [KEY_E], "axes": [], "buttons": [JOY_BUTTON_A]},
 	"travel": {"keys": [KEY_F], "axes": [], "buttons": [JOY_BUTTON_Y]},  # 火を灯した篝火の近くで、別の篝火へ移る
+	# 戦闘。攻撃は、マウスの左ボタンか J (トラックパッドでも打ちやすい)。回避は、Q か Option (Ctrl は、Mac では、右クリックになるので使わない)
+	"attack": {"keys": [KEY_J], "mouse": [MOUSE_BUTTON_LEFT], "axes": [], "buttons": [JOY_BUTTON_RIGHT_SHOULDER]},
+	"dodge": {"keys": [KEY_Q, KEY_ALT], "axes": [], "buttons": [JOY_BUTTON_LEFT_SHOULDER]},
 }
 
 
@@ -40,6 +43,10 @@ static func ensure() -> void:
 			var event := InputEventJoypadMotion.new()
 			event.axis = axis[0]
 			event.axis_value = axis[1]
+			InputMap.action_add_event(action, event)
+		for button: int in spec.get("mouse", []):
+			var event := InputEventMouseButton.new()
+			event.button_index = button
 			InputMap.action_add_event(action, event)
 		for button: int in spec.buttons:
 			var event := InputEventJoypadButton.new()

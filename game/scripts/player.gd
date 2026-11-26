@@ -33,6 +33,9 @@ signal travel_requested(bonfire: Node3D)  # 火を灯した篝火の近くで、
 
 # 入力を受け付けない (移動の一覧を開いている間)。重力だけが効く
 var input_blocked := false
+# マウスを、ゲームが握っているか (視点を回す。外れている時の左クリックは、握り直すだけで、攻撃しない)。
+# Input.mouse_mode と同じに保つ。ヘッドレス (テスト) では、Input.mouse_mode が動かないので、この印で判断する
+var mouse_captured := true
 var spawn_position: Vector3
 # これより低い所へ落ちたら、位置を見失う (床の下へ落ちた、と見なす)。地域で、標高の低いタイルを並べる時は、
 # 地域でいちばん低い地面より、下に決める (World が、タイルの位置から決めて、渡す)
@@ -51,6 +54,8 @@ var _base_fov := 75.0
 
 @onready var model: Node3D = $Model
 @onready var character: CharacterModel = $Model/Character
+var combat: PlayerCombat  # 戦闘 (攻撃、回避、スタミナ、体力)
+var vitals: Vitals  # 体力とスタミナの棒
 @onready var pivot: Node3D = $CameraPivot
 @onready var arm: SpringArm3D = $CameraPivot/SpringArm3D
 @onready var camera: Camera3D = $CameraPivot/SpringArm3D/Camera3D
@@ -66,7 +71,15 @@ func _ready() -> void:
 	_base_fov = camera.fov
 	prompt.text = "E: 休む"
 	prompt.visible = false
+	mouse_captured = true
 	character.load_model()  # 人型のモデル。読み込めなければ、仮のカプセルのまま
+	combat = PlayerCombat.new()
+	combat.name = "Combat"
+	add_child(combat)
+	combat.setup(self, character)
+	vitals = Vitals.new()
+	get_node("../HUD").add_child(vitals)
+	vitals.bind(combat)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
@@ -74,6 +87,7 @@ func _notification(what: int) -> void:
 	# ウィンドウから離れる時 (Cmd+Tab など) はマウスを解放する
 	if what == NOTIFICATION_WM_WINDOW_FOCUS_OUT:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		mouse_captured = false
 
 
 func _input(event: InputEvent) -> void:
@@ -82,16 +96,24 @@ func _input(event: InputEvent) -> void:
 		return  # 一覧を開いている間は、Esc を、一覧が受け取る (一覧を閉じる)
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		mouse_captured = false
 		get_viewport().set_input_as_handled()
 
 
 func _unhandled_input(event: InputEvent) -> void:
 	if input_blocked:
 		return
-	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+	if event is InputEventMouseMotion and mouse_captured:
 		look(-event.relative.x * MOUSE_SENSITIVITY, -event.relative.y * MOUSE_SENSITIVITY)
-	elif event is InputEventMouseButton and event.pressed:
-		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	elif event is InputEventMouseButton and event.pressed and not mouse_captured:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED  # マウスを戻すだけ (その時の左クリックでは、攻撃しない)
+		mouse_captured = true
+	elif event.is_action_pressed("attack"):
+		if not rescanning:
+			combat.try_attack(_input_direction())
+	elif event.is_action_pressed("dodge"):
+		if not rescanning:
+			combat.try_dodge(_input_direction())
 	elif event.is_action_pressed("rest"):
 		rest()
 	elif event.is_action_pressed("travel"):
@@ -102,6 +124,7 @@ func _unhandled_input(event: InputEvent) -> void:
 func _physics_process(delta: float) -> void:
 	if rescanning:
 		return
+	combat.tick(delta)
 	if input_blocked:
 		velocity.x = 0.0
 		velocity.z = 0.0
@@ -121,7 +144,7 @@ func _physics_process(delta: float) -> void:
 	_buffer = JUMP_BUFFER if Input.is_action_just_pressed("jump") else _buffer - delta
 	if not on_floor:
 		velocity.y -= gravity * delta
-	if _buffer > 0.0 and _coyote > 0.0:
+	if _buffer > 0.0 and _coyote > 0.0 and not combat.is_busy():  # 攻撃や回避の最中は、跳べない
 		velocity.y = jump_velocity
 		_buffer = 0.0
 		_coyote = 0.0
@@ -132,14 +155,16 @@ func _physics_process(delta: float) -> void:
 	var direction := Basis(Vector3.UP, pivot.rotation.y) * Vector3(input.x, 0.0, input.y)
 	var run_pressed := Input.is_action_pressed("run")
 	var running := run_pressed and direction.length() > 0.1  # 視野を広げるのは、実際に動いている間だけ
-	var target := Vector2(direction.x, direction.z) * (RUN_SPEED if run_pressed else WALK_SPEED)
+	var target := Vector2(direction.x, direction.z) * (RUN_SPEED if run_pressed else WALK_SPEED) * combat.move_factor()
 	var accel := ACCELERATION if on_floor else AIR_ACCELERATION
 	var horizontal := Vector2(velocity.x, velocity.z).move_toward(target, accel * delta)
+	if combat.is_dodging():
+		horizontal = combat.dodge_velocity  # 回避の間は、回避の向きと速さ
 	velocity.x = horizontal.x
 	velocity.z = horizontal.y
 
-	# 体を進む向きへ回す。立ち止まっている間は、向きを保つ
-	if direction.length() > 0.1:
+	# 体を進む向きへ回す。立ち止まっている間は、向きを保つ。攻撃と回避の間は、向きを変えない
+	if direction.length() > 0.1 and not combat.is_busy():
 		var yaw := atan2(-direction.x, -direction.z)  # モデルの正面は -Z
 		model.rotation.y = lerp_angle(model.rotation.y, yaw, clampf(TURN_SPEED * delta, 0.0, 1.0))
 
@@ -151,6 +176,17 @@ func _physics_process(delta: float) -> void:
 
 	if global_position.y < fall_limit:
 		_rescan()
+
+
+# いまの移動の入力の向き (カメラの向きが基準。世界の向き)。入力がなければ、ゼロ
+func _input_direction() -> Vector3:
+	var input := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+	return Basis(Vector3.UP, pivot.rotation.y) * Vector3(input.x, 0.0, input.y)
+
+
+# ダメージを受ける (敵の攻撃など)。回避の最初の間は、受けない。受けたら true
+func take_damage(amount: float, source: Node = null) -> bool:
+	return combat.take_damage(amount, source)
 
 
 # 視点を回す。yaw は左右、pitch は上下 (ラジアン)。見上げ、見下ろしには上限がある
@@ -207,7 +243,7 @@ func _update_nearby_bonfire() -> void:
 
 # 篝火の近くで休むと、ここが復帰地点になる
 func rest() -> void:
-	if rescanning or nearby_bonfire == null:
+	if rescanning or nearby_bonfire == null or combat.is_busy():
 		return
 	var first_time: bool = not nearby_bonfire.lit if "lit" in nearby_bonfire else not has_rested
 	spawn_position = nearby_bonfire.rest_position()

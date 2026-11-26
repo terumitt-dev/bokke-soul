@@ -120,3 +120,9 @@ steps:
     image: barichello/godot-ci:4.7.2
     commands:
       - sh game/tests/run.sh character_test
+
+  # 戦闘の土台 (操作の割り当て、剣、攻撃の 3 連続、回避、スタミナ、体力、体力とスタミナの棒、的、マウスを戻す時は攻撃しない) の動作テスト
+  - name: combat-test
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - sh game/tests/run.sh combat_test
