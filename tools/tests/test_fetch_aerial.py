@@ -94,3 +94,42 @@ def test_build_writes_jpg_next_to_json_and_keeps_existing(tmp_path):
     assert not (tmp_path / "broken.jpg").exists()
     assert fa.build(tmp_path, solid_fetch) == []  # 2 回目は、作り直さない
     assert [p.name for p in fa.build(tmp_path, solid_fetch, force=True)] == ["a.jpg"]
+
+
+class FakeResponse:
+    def __init__(self, data):
+        self.data = data
+
+    def read(self):
+        return self.data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def png_bytes():
+    import io
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (4, 4), (10, 20, 30)).save(buffer, "JPEG")
+    return buffer.getvalue()
+
+
+def test_download_caches_valid_tile_and_skips_network_next_time(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(fa.urllib.request, "urlopen", lambda request, timeout: calls.append(request) or FakeResponse(png_bytes()))
+    fa.download(18, 1, 2, cache=tmp_path)
+    fa.download(18, 1, 2, cache=tmp_path)
+    assert len(calls) == 1
+    assert (tmp_path / "18" / "1" / "2.jpg").exists()
+    assert not list(tmp_path.rglob("*.part"))
+
+
+def test_download_does_not_cache_a_broken_tile(tmp_path, monkeypatch):
+    monkeypatch.setattr(fa.urllib.request, "urlopen", lambda request, timeout: FakeResponse(b"not an image"))
+    with pytest.raises(Exception):
+        fa.download(18, 1, 2, cache=tmp_path)
+    assert not list(tmp_path.rglob("*.jpg")) and not list(tmp_path.rglob("*.part"))

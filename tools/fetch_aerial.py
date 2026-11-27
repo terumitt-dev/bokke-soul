@@ -46,10 +46,14 @@ def download(z: int, x: int, y: int, cache: Path = CACHE) -> Image.Image:
     if path.exists():
         return Image.open(path).convert("RGB")
     request = urllib.request.Request(URL.format(z=z, x=x, y=y), headers={"User-Agent": "bokke-soul/fetch_aerial"})
-    data = urllib.request.urlopen(request, timeout=30).read()
+    with urllib.request.urlopen(request, timeout=30) as response:
+        data = response.read()
+    image = Image.open(io.BytesIO(data)).convert("RGB")  # 画像として読めることを確かめてから、ためる
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
-    return Image.open(io.BytesIO(data)).convert("RGB")
+    temporary = path.with_suffix(".part")
+    temporary.write_bytes(data)
+    temporary.replace(path)  # 途中で止まっても、壊れたタイルが、キャッシュに残らない
+    return image
 
 
 def render(origin: tuple[float, float], size: tuple[float, float], crs: str, fetch: Fetch = download) -> Image.Image:
