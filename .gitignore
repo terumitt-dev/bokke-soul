@@ -18,3 +18,6 @@ __pycache__/
 # 変換後のデータ (ローカル確認用。本番は別の保管先)
 data/processed/*
 !data/processed/.gitkeep
+
+# 取得した航空写真のタイル (再配布しない)
+data/cache/

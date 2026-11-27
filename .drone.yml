@@ -131,3 +131,9 @@ steps:
     image: barichello/godot-ci:4.7.2
     commands:
       - sh game/tests/run.sh enemy_test
+
+  # 航空写真 (地形の隣の .jpg の読み込み、なくても壊れていても動く、地面の素材に、地形の範囲で貼る) の動作テスト
+  - name: aerial-test
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - sh game/tests/run.sh aerial_test

@@ -9,6 +9,8 @@ const ARG_PREFIX := "--world="
 const SAMPLE_PATH := "res://assets/sample_world.glb"
 # いまは色のないデータだけを扱うので、くすんだ砂の色を付ける (色つきの点群を扱う時に見直す)
 const TERRAIN_COLOR := Color(0.40, 0.38, 0.35)
+# 航空写真を、読み込んだ世界のノードに付ける時の、メタデータの名前
+const AERIAL_META := "aerial_texture"
 
 
 # タイトル画面で選んだ世界の場所。ゲーム本体へ引き継ぐ (起動時の引数がない時に使う)
@@ -53,7 +55,23 @@ static func load_world(path: String) -> Dictionary:
 	material.roughness = 1.0
 	for mesh: MeshInstance3D in world.find_children("*", "MeshInstance3D", true, false):
 		mesh.material_override = material
+	var aerial := aerial_for(path)
+	if aerial != null:
+		world.set_meta(AERIAL_META, aerial)  # 点の表現 (PointWorld) が、地面の素材に貼る
 	return {"node": world, "error": ""}
+
+
+# 世界のデータの隣にある航空写真 (同じ名前の .jpg。tools/fetch_aerial.py が作る)。
+# 地形メッシュの範囲にそのまま重なる (上が北)。なければ、壊れていれば null (単色の地面で動く)
+static func aerial_for(path: String) -> Texture2D:
+	var image_path := path.get_basename() + ".jpg"
+	if not FileAccess.file_exists(image_path):
+		return null
+	var image := Image.load_from_file(image_path)
+	if image == null or image.is_empty():
+		return null
+	image.generate_mipmaps()
+	return ImageTexture.create_from_image(image)
 
 
 # 世界のデータの隣にある .json (変換ツールが書く) を読む。なければ、壊れていれば、辞書でなければ、空の辞書。

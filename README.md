@@ -45,6 +45,8 @@ godot --path game
 godot --path game -- --world=/絶対パス/world.glb
 ```
 
+地面の色は、地形の隣に `.jpg` (国土地理院の航空写真。`tools/fetch_aerial.py` で作る) があれば、それを貼ります。なければ単色です。
+
 タイトル画面の隅とクレジットには、世界のデータの出典が出ます (データの隣の `.json` から読みます。`tools/README.md` の `--credit` を参照)。
 
 ## 操作
