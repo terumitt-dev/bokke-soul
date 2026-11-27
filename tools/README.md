@@ -138,3 +138,16 @@ godot --path game res://scenes/world_local.tscn -- --world=/絶対パス/terrain
 ### 地域
 
 `areas.json` の `region` (`id` と `name`) を書くと、全てのタイルの `.json` に、`region` (地域の名前) と `region_name` が入ります。ゲームは、同じ `region` のタイルを、まとめて読み込んで、測量座標の位置に並べます。タイルの間は、暗転も読み込みもなく、歩いて渡れます。`region` の `id` は、世界の名前と同じ決まり (英数字と `.` `_` `-` の 64 文字まで) です。何タイルで 1 つの地域にするか、は、決まっていません (いまは、`areas.json` に書いた全てのタイル)。
+
+## 地面の色 (航空写真)
+
+変換した地形ごとに、国土地理院の航空写真を切り出して、同じ名前の `.jpg` にします。ゲームは、地形 (`.glb`) の隣に `.jpg` があれば、地面に貼ります (なければ、単色)。
+
+```sh
+.venv/bin/python tools/fetch_aerial.py data/processed
+```
+
+- 範囲は、隣の `.json` の `origin`、`size`、`crs` から決めます (地形メッシュにそのまま重なります。1 ピクセル 0.5 m、上が北)。`crs` がない `.json` は飛ばします (座標系が分からないと、重ねられないため)。
+- ある `.jpg` は、そのままにします。作り直すには、`--force` を付けます。
+- ネットワークを使います。取ったタイルは、`data/cache/gsi-seamlessphoto/` にためます (`.gitignore` 済み)。
+- 出典と利用条件は、`docs/data-sources.md` の「地面の色 (航空写真)」を参照してください。

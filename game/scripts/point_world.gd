@@ -85,6 +85,12 @@ func setup(world: Node3D, player: Node3D, new_mode: Mode = Mode.MESH_AND_POINTS)
 		material.set_shader_parameter("reveal_origin", reveal.origin)
 		material.set_shader_parameter("reveal_size", reveal.size)
 	_terrain_material.set_shader_parameter("albedo", WorldLoader.TERRAIN_COLOR)
+	var aerial: Variant = world.get_meta(WorldLoader.AERIAL_META) if world.has_meta(WorldLoader.AERIAL_META) else null
+	if aerial is Texture2D:
+		# 写真は、地形メッシュの範囲に重なる (西北の角が左上)。範囲は、いまの位置 (ゲームの座標) の、東西 x、南北 z
+		_terrain_material.set_shader_parameter("aerial_tex", aerial)
+		_terrain_material.set_shader_parameter("aerial_rect", Vector4(bounds.position.x, bounds.position.z, bounds.size.x, bounds.size.z))
+		_terrain_material.set_shader_parameter("aerial_mix", 1.0)
 
 	var points := _collect_points()
 	point_count = points.size()
