@@ -469,6 +469,7 @@ func _physics_process(_delta: float) -> void:
 # 隣のマップへ移る。いまの様子を保存して、暗転して、行き先と、着く位置 (測量座標で同じ場所を、端から少し内側へ) を引き継ぐ
 func _travel(direction: String) -> void:
 	_traveling = true
+	player.immune = true
 	var target: Dictionary = _exits[direction]
 	var local_position: Vector3 = player.global_position - _tiles[_current].offset  # いまのタイルの座標
 	var position := WorldRegistry.clamp_inside(target, WorldRegistry.convert_position(_entry, target, local_position), ARRIVAL_INSET)
@@ -485,6 +486,7 @@ func _depart(target: Dictionary, position: Variant) -> void:
 	# 保存に失敗したら、移らない (いまのマップの探索が、静かに失われないように)。しばらくしてから、もう一度試す
 	if _save_active and not (save_now() and SaveGame.set_current_area(target.path)):
 		_traveling = false
+		player.immune = false
 		_arrived_at = Time.get_ticks_msec() + SAVE_RETRY_MS - EXIT_COOLDOWN_MS
 		return
 	var carried := {
@@ -509,6 +511,7 @@ func _depart(target: Dictionary, position: Variant) -> void:
 		# 場面を切り替えられなかった。暗転を戻して、しばらくしてから、もう一度試す
 		WorldLoader.arrival = {}
 		_traveling = false
+		player.immune = false
 		_arrived_at = Time.get_ticks_msec() + SAVE_RETRY_MS - EXIT_COOLDOWN_MS
 		_veil_label.visible = false
 		_fade(0.0)
@@ -585,6 +588,7 @@ func _tile_of(entry: Dictionary) -> Dictionary:
 # destination へ移る。読み込んだタイルなら、暗転して、その篝火のそばへ。そうでなければ、そのマップへ、場面を切り替えて
 func _go_to(destination: Dictionary) -> void:
 	_traveling = true
+	player.immune = true
 	if destination.tile.is_empty():
 		await _depart(destination.entry, null)  # 着く位置は、行き先が、自分の記録から決める
 		return
@@ -600,6 +604,7 @@ func _go_to(destination: Dictionary) -> void:
 	_arrived_at = Time.get_ticks_msec()  # 着いた直後は、端の出口が効かない
 	await _fade(0.0)
 	_traveling = false
+	player.immune = false
 
 
 # 暗転の幕。画面全体を覆う黒と、「読み込み中」の文字

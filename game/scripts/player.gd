@@ -57,6 +57,7 @@ var _base_fov := 75.0
 @onready var model: Node3D = $Model
 @onready var character: CharacterModel = $Model/Character
 var combat: PlayerCombat  # 戦闘 (攻撃、回避、スタミナ、体力)
+var immune := false  # 場面を移っている間 (暗転から、切り替えまで) は、ダメージを受けない。倒れて、移動を迂回しないように
 var dead := false  # 倒れている (体力がなくなってから、復活するまで)
 var death_banner: DeathBanner
 var vitals: Vitals  # 体力とスタミナの棒
@@ -202,6 +203,8 @@ func _input_direction() -> Vector3:
 
 # ダメージを受ける (敵の攻撃など)。回避の最初の間は、受けない。受けたら true
 func take_damage(amount: float, source: Node = null) -> bool:
+	if immune:
+		return false
 	return combat.take_damage(amount, source)
 
 

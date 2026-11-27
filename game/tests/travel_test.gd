@@ -169,7 +169,10 @@ func _initialize() -> void:
 	var labels: Array = world._menu_destinations.map(func(d: Dictionary) -> String: return d.label)
 	check(labels == ["東の台地の篝火", "外の地の篝火"], "行き先は、火を灯した B と X: %s" % [labels])
 	world._menu.buttons[0].pressed.emit()
-	await create_timer(1.1).timeout  # 暗転 (0.4 秒) と、戻り (0.4 秒)
+	await create_timer(0.2).timeout  # 暗転の途中
+	check(world._traveling and player.immune and not player.take_damage(1000.0) and not player.dead, "移動の暗転中は、ダメージを受けない (倒れて、復活の処理を迂回しない)")
+	await create_timer(0.9).timeout  # 暗転 (0.4 秒) と、戻り (0.4 秒)
+	check(not player.immune, "着いたら、またダメージを受ける")
 	var distance := Vector2(player.global_position.x - fire_b.global_position.x, player.global_position.z - fire_b.global_position.z).length()
 	check(distance < 3.0 and world._entry.world_id == "trv-b", "同じ地域の篝火へ移る。B の篝火のそばに立つ (距離 %.1f)" % distance)
 	check(player.spawn_position.is_equal_approx(spawn_before), "移るだけで、復帰地点は、変わらない")
