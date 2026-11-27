@@ -72,6 +72,7 @@ var _traveling := false
 var _overlay: CanvasLayer
 var _veil: ColorRect
 var _veil_label: Label
+var _enemy_spot := Vector3.ZERO  # 敵の、最初にいる場所
 var _menu: TravelMenu
 var _menu_destinations: Array[Dictionary] = []
 
@@ -122,6 +123,7 @@ func _ready() -> void:
 		home["fire"] = _add_start_bonfire(home.meshes, start)  # 始まりの篝火も、タイルの篝火として、火の状態を持つ
 	_update_fall_limit()
 	_add_training_dummy(home)
+	_add_enemy(home)
 
 	_place_arrival(home.meshes)
 	_setup_points_position = player.global_position  # テスト用: 探索地図を作る時の、プレイヤーの位置
@@ -132,6 +134,7 @@ func _ready() -> void:
 	_update_current(true)
 	_finish_arrival()
 	player.travel_requested.connect(_on_travel_requested)
+	player.combat.died.connect(_close_travel_menu)  # 一覧を開いている間に倒れたら、閉じる (行き先を選べない)
 	if not _pending.is_empty():
 		_stream_tiles()
 
@@ -177,6 +180,39 @@ func _add_training_dummy(home: Dictionary) -> void:
 	dummy.name = "TrainingDummy"
 	add_child(dummy)
 	dummy.global_position = Vector3(spot.x, heights[0], spot.z)
+
+
+# 敵 (骸骨) を 1 体、始める世界の篝火の、少し離れた所に置く。仮の置き方 (配置の仕組みができたら、そちらへ移す)。
+# プレイヤーが休んだ時と、倒れて復活した時に、立て直す (倒していれば、また現れる)
+func _add_enemy(home: Dictionary) -> void:
+	var fire: Node3D = home.fire
+	if fire == null:
+		return
+	var spot: Vector3 = fire.global_position + Vector3(-7.0, 0.0, -9.0)
+	var heights := WorldLoader.surface_heights(home.meshes, spot.x, spot.z)
+	if heights.is_empty():
+		return
+	heights.sort_custom(func(a: float, b: float) -> bool: return absf(a - fire.global_position.y) < absf(b - fire.global_position.y))
+	_enemy_spot = Vector3(spot.x, heights[0] + 0.05, spot.z)
+	_spawn_enemy()
+	player.rested.connect(func(_position: Vector3) -> void: _reset_enemies())
+	player.revived.connect(_reset_enemies)
+
+
+func _spawn_enemy() -> void:
+	var enemy := Enemy.new()
+	enemy.name = "Enemy"
+	add_child(enemy)
+	enemy.global_position = _enemy_spot
+	enemy.spawn_position = _enemy_spot
+
+
+# 敵を、最初の状態に戻す。倒した敵は、また現れる
+func _reset_enemies() -> void:
+	for enemy: Enemy in get_tree().get_nodes_in_group("enemy"):
+		enemy.reset()
+	if _enemy_spot != Vector3.ZERO and get_tree().get_nodes_in_group("enemy").filter(func(e: Node) -> bool: return e.state != Enemy.State.DEAD).is_empty():
+		_spawn_enemy()
 
 
 # 当たり判定 (面ごとの三角形の形) を、少しずつ作る。三角形を、東西に COLLISION_STRIPS 本の帯に分ける作業は、別のスレッドで行い、
@@ -433,6 +469,7 @@ func _physics_process(_delta: float) -> void:
 # 隣のマップへ移る。いまの様子を保存して、暗転して、行き先と、着く位置 (測量座標で同じ場所を、端から少し内側へ) を引き継ぐ
 func _travel(direction: String) -> void:
 	_traveling = true
+	player.immune = true
 	var target: Dictionary = _exits[direction]
 	var local_position: Vector3 = player.global_position - _tiles[_current].offset  # いまのタイルの座標
 	var position := WorldRegistry.clamp_inside(target, WorldRegistry.convert_position(_entry, target, local_position), ARRIVAL_INSET)
@@ -449,6 +486,7 @@ func _depart(target: Dictionary, position: Variant) -> void:
 	# 保存に失敗したら、移らない (いまのマップの探索が、静かに失われないように)。しばらくしてから、もう一度試す
 	if _save_active and not (save_now() and SaveGame.set_current_area(target.path)):
 		_traveling = false
+		player.immune = false
 		_arrived_at = Time.get_ticks_msec() + SAVE_RETRY_MS - EXIT_COOLDOWN_MS
 		return
 	var carried := {
@@ -473,6 +511,7 @@ func _depart(target: Dictionary, position: Variant) -> void:
 		# 場面を切り替えられなかった。暗転を戻して、しばらくしてから、もう一度試す
 		WorldLoader.arrival = {}
 		_traveling = false
+		player.immune = false
 		_arrived_at = Time.get_ticks_msec() + SAVE_RETRY_MS - EXIT_COOLDOWN_MS
 		_veil_label.visible = false
 		_fade(0.0)
@@ -493,17 +532,28 @@ func _on_travel_requested(here: Node3D) -> void:
 		names.append(destination.label)
 	_menu = TravelMenu.new()
 	add_child(_menu)
+	var was_captured: bool = player.mouse_captured  # 開く前に、マウスを握っていたか (閉じたら、一覧が、その状態に戻す)
 	player.input_blocked = true
-	_menu.chosen.connect(_on_travel_chosen)
+	_menu.chosen.connect(func(index: int) -> void:
+		player.mouse_captured = was_captured
+		_on_travel_chosen(index))
 	_menu.closed.connect(func() -> void:
 		player.input_blocked = false
+		player.mouse_captured = was_captured
 		_menu = null)
 	_menu.open(names)
+
+
+func _close_travel_menu() -> void:
+	if is_instance_valid(_menu):
+		_menu.close()
 
 
 func _on_travel_chosen(index: int) -> void:
 	player.input_blocked = false
 	_menu = null
+	if player.dead:
+		return
 	if index >= 0 and index < _menu_destinations.size():
 		_go_to(_menu_destinations[index])
 
@@ -538,6 +588,7 @@ func _tile_of(entry: Dictionary) -> Dictionary:
 # destination へ移る。読み込んだタイルなら、暗転して、その篝火のそばへ。そうでなければ、そのマップへ、場面を切り替えて
 func _go_to(destination: Dictionary) -> void:
 	_traveling = true
+	player.immune = true
 	if destination.tile.is_empty():
 		await _depart(destination.entry, null)  # 着く位置は、行き先が、自分の記録から決める
 		return
@@ -553,6 +604,7 @@ func _go_to(destination: Dictionary) -> void:
 	_arrived_at = Time.get_ticks_msec()  # 着いた直後は、端の出口が効かない
 	await _fade(0.0)
 	_traveling = false
+	player.immune = false
 
 
 # 暗転の幕。画面全体を覆う黒と、「読み込み中」の文字

@@ -126,3 +126,8 @@ steps:
     image: barichello/godot-ci:4.7.2
     commands:
       - sh game/tests/run.sh combat_test
+
+  - name: enemy-test
+    image: barichello/godot-ci:4.7.2
+    commands:
+      - sh game/tests/run.sh enemy_test

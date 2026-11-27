@@ -126,6 +126,30 @@ func _initialize() -> void:
 	check(is_instance_valid(world._menu) and world._menu.is_open() and player.input_blocked, "閉じたあとも、もう一度、一覧を開ける (解放済みの一覧を触らない)")
 	world._menu._unhandled_input(_action("ui_cancel"))
 	await process_frame
+	# マウスを握っていた状態は、一覧を閉じると、元に戻る (握っていなければ、握らないまま)
+	player.mouse_captured = true
+	player._unhandled_input(_action("travel"))
+	player.mouse_captured = false  # 一覧を開いている間に、ウィンドウの外へ出て、印が下りた時 (player.gd の focus-out と同じ)
+	world._menu._unhandled_input(_action("ui_cancel"))
+	await process_frame
+	check(player.mouse_captured, "マウスを握っていた時は、一覧を閉じると、握った状態に戻る (開いている間に印が下りても)")
+	player.mouse_captured = false
+	player._unhandled_input(_action("travel"))
+	world._menu._unhandled_input(_action("ui_cancel"))
+	await process_frame
+	check(not player.mouse_captured, "マウスを握っていなかった時は、一覧を閉じても、握らない")
+	# 一覧を開いている間に倒れたら、一覧は閉じる。行き先を選んでも、移らない
+	player.mouse_captured = true
+	player._unhandled_input(_action("travel"))
+	var open_menu: TravelMenu = world._menu
+	player.take_damage(1000.0)
+	await process_frame
+	check(player.dead and (not is_instance_valid(open_menu) or not open_menu.is_open()) and world._menu == null, "一覧を開いている間に倒れたら、一覧は閉じる")
+	check(not player.input_blocked and player.mouse_captured, "倒れて一覧が閉じても、操作の止まりと、マウスの印は、元に戻る")
+	world._on_travel_chosen(0)
+	check(world._traveling == false and world._path == path_a, "倒れている間は、行き先を選んでも、移らない")
+	await create_timer(float(player.DEATH_SECONDS) + float(player.RESCAN_SECONDS) + 0.8).timeout
+	check(not player.dead, "復活すると、また動ける")
 
 	# B の篝火にも火を灯して、A に戻って休む (復帰地点は、A)
 	player.global_position = fire_b.global_position + Vector3(0.5, 0.5, 0.0)
@@ -145,7 +169,10 @@ func _initialize() -> void:
 	var labels: Array = world._menu_destinations.map(func(d: Dictionary) -> String: return d.label)
 	check(labels == ["東の台地の篝火", "外の地の篝火"], "行き先は、火を灯した B と X: %s" % [labels])
 	world._menu.buttons[0].pressed.emit()
-	await create_timer(1.1).timeout  # 暗転 (0.4 秒) と、戻り (0.4 秒)
+	await create_timer(0.2).timeout  # 暗転の途中
+	check(world._traveling and player.immune and not player.take_damage(1000.0) and not player.dead, "移動の暗転中は、ダメージを受けない (倒れて、復活の処理を迂回しない)")
+	await create_timer(0.9).timeout  # 暗転 (0.4 秒) と、戻り (0.4 秒)
+	check(not player.immune, "着いたら、またダメージを受ける")
 	var distance := Vector2(player.global_position.x - fire_b.global_position.x, player.global_position.z - fire_b.global_position.z).length()
 	check(distance < 3.0 and world._entry.world_id == "trv-b", "同じ地域の篝火へ移る。B の篝火のそばに立つ (距離 %.1f)" % distance)
 	check(player.spawn_position.is_equal_approx(spawn_before), "移るだけで、復帰地点は、変わらない")

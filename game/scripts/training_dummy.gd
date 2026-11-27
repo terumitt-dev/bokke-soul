@@ -15,6 +15,7 @@ var last_damage := 0.0
 
 var _body: Node3D
 var _material: StandardMaterial3D
+var _flash_tween: Tween
 
 
 func _ready() -> void:
@@ -73,26 +74,16 @@ func _add_part(mesh: Mesh, position: Vector3, size: Vector3) -> void:
 
 # 当たった時に、一瞬、赤く光る
 func _flash() -> void:
+	if _flash_tween != null and _flash_tween.is_valid():
+		_flash_tween.kill()  # 連続で当たった時に、光り方が重ならないように
 	_material.emission_energy_multiplier = 2.5
-	var tween := create_tween()
-	tween.tween_property(_material, "emission_energy_multiplier", 0.0, 0.25)
+	_flash_tween = create_tween()
+	_flash_tween.tween_property(_material, "emission_energy_multiplier", 0.0, 0.25)
 
 
-# ダメージの数字を、頭の上に出して、浮かせながら消す
+# ダメージの数字を、頭の上に出す
 func _show_number(amount: float) -> void:
-	var label := Label3D.new()
-	label.text = str(int(round(amount)))
-	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	label.font_size = 64
-	label.outline_size = 12
-	label.no_depth_test = true
-	label.position = Vector3(0.0, 2.0, 0.0)
-	add_child(label)
-	var tween := create_tween()
-	tween.set_parallel(true)
-	tween.tween_property(label, "position:y", 2.8, 0.8)
-	tween.tween_property(label, "modulate:a", 0.0, 0.8)
-	tween.chain().tween_callback(label.queue_free)
+	DamageNumber.spawn(self, amount, 2.0)
 
 
 # 倒れて、しばらくしたら、起き上がる
