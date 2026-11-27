@@ -138,6 +138,18 @@ func _initialize() -> void:
 	world._menu._unhandled_input(_action("ui_cancel"))
 	await process_frame
 	check(not player.mouse_captured, "マウスを握っていなかった時は、一覧を閉じても、握らない")
+	# 一覧を開いている間に倒れたら、一覧は閉じる。行き先を選んでも、移らない
+	player.mouse_captured = true
+	player._unhandled_input(_action("travel"))
+	var open_menu: TravelMenu = world._menu
+	player.take_damage(1000.0)
+	await process_frame
+	check(player.dead and (not is_instance_valid(open_menu) or not open_menu.is_open()) and world._menu == null, "一覧を開いている間に倒れたら、一覧は閉じる")
+	check(not player.input_blocked and player.mouse_captured, "倒れて一覧が閉じても、操作の止まりと、マウスの印は、元に戻る")
+	world._on_travel_chosen(0)
+	check(world._traveling == false and world._path == path_a, "倒れている間は、行き先を選んでも、移らない")
+	await create_timer(float(player.DEATH_SECONDS) + float(player.RESCAN_SECONDS) + 0.8).timeout
+	check(not player.dead, "復活すると、また動ける")
 
 	# B の篝火にも火を灯して、A に戻って休む (復帰地点は、A)
 	player.global_position = fire_b.global_position + Vector3(0.5, 0.5, 0.0)

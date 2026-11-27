@@ -134,6 +134,7 @@ func _ready() -> void:
 	_update_current(true)
 	_finish_arrival()
 	player.travel_requested.connect(_on_travel_requested)
+	player.combat.died.connect(_close_travel_menu)  # 一覧を開いている間に倒れたら、閉じる (行き先を選べない)
 	if not _pending.is_empty():
 		_stream_tiles()
 
@@ -540,9 +541,16 @@ func _on_travel_requested(here: Node3D) -> void:
 	_menu.open(names)
 
 
+func _close_travel_menu() -> void:
+	if is_instance_valid(_menu):
+		_menu.close()
+
+
 func _on_travel_chosen(index: int) -> void:
 	player.input_blocked = false
 	_menu = null
+	if player.dead:
+		return
 	if index >= 0 and index < _menu_destinations.size():
 		_go_to(_menu_destinations[index])
 
